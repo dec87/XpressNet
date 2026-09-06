@@ -33,14 +33,8 @@ SoftwareSerial XNetSerial;
 XpressNetClass::XpressNetClass()
 {
 	// initialize this instance's variables
-	Railpower = 0xFF; // Ausgangs undef.
 	XNetclearSendBuf();
 	XNetRun = false; // XNet ist inactive;
-	xLokStsclear();	 // l�schen aktiver Loks in Slotserver
-	ReqLocoAdr = 0;
-	ReqLocoAgain = 0;
-	ReqFktAdr = 0;
-	SlotLast = 0;
 	ReadData = false; // keine Serial Daten Speichern
 }
 
@@ -53,7 +47,6 @@ void XpressNetClass::start(byte XAdr, uint8_t XControl) // Initialisierung Seria
 {
 	ledState = LOW;		 // Status LED, used to set the LED
 	previousMillis = 0;	 // Reset Time Count
-	SlotTime = millis(); // will store last time LED was updated
 	if (notifyXNetStatus)
 		notifyXNetStatus(ledState);
 
@@ -130,8 +123,6 @@ void XpressNetClass::receive(void)
 	XNetMsg[XNetcommand] = 0x00;	savedData[1]
 	XNetMsg[XNetdata1] = 0x00;	savedData[2]
 	*/
-	unsigned long currentMillis = millis(); // aktuelle Zeit setzten
-
 	if (DataReady == true)
 	{ // Serial Daten dekodieren
 		DataReady = false;
@@ -145,68 +136,14 @@ void XpressNetClass::receive(void)
 		}
 		if (XNetMsg[XNetmsg] == 0x60)
 		{ // GENERAL_BROADCAST
-			if (XNetMsg[XNetlength] == 4 && XNetMsg[XNetcom] == 0x61)
+			if ((XNetMsg[XNetcom] & 0xF0) == 0x40)
 			{
-				if ((XNetMsg[XNetdata1] == 0x01) && (XNetMsg[XNetdata2] == 0x60))
-				{
-					// Normal Operation Resumed
-					Railpower = csNormal;
-					if (notifyXNetPower)
-						notifyXNetPower(Railpower);
-				}
-				else if ((XNetMsg[XNetdata1] == 0x00) && (XNetMsg[XNetdata2] == 0x61))
-				{
-					// Track power off
-					Railpower = csTrackVoltageOff;
-					if (notifyXNetPower)
-						notifyXNetPower(Railpower);
-				}
-				else if ((XNetMsg[XNetdata1] == 0x08))
-				{
-					// Track Short
-					Railpower = csShortCircuit;
-					if (notifyXNetPower)
-					{
-						notifyXNetPower(csTrackVoltageOff);
-						notifyXNetPower(Railpower);
-					}
-				}
-				else if ((XNetMsg[XNetdata1] == 0x02) && (XNetMsg[XNetdata2] == 0x63))
-				{
-					// Service Mode Entry
-					Railpower = csServiceMode;
-					if (notifyXNetPower)
-						notifyXNetPower(Railpower);
-				}
-			}
-			else if (XNetMsg[XNetcom] == 0x81)
-			{
-				if ((XNetMsg[XNetdata1] == 0x00) && (XNetMsg[XNetdata2] == 0x81))
-				{
-					// Emergency Stop
-					Railpower = csEmergencyStop;
-					if (notifyXNetPower)
-						notifyXNetPower(Railpower);
-				}
-			}
-			else if ((XNetMsg[XNetcom] & 0xF0) == 0x40)
-			{
-				// R�ckmeldung
+				// R�ckmeldung (Weichen-/R�ckmelder-Status)
 				byte len = (XNetMsg[XNetcom] & 0x0F) / 2; // each Adr and Data
 				for (byte i = 1; i <= len; i++)
 				{
 					sendSchaltinfo(false, XNetMsg[XNetcom + (i * 2) - 1] /*Adr*/, XNetMsg[XNetcom + (i * 2)] /*Data*/);
 				}
-			}
-			else if (XNetMsg[XNetlength] == 8 && XNetMsg[XNetcom] == 0x05 && XNetMsg[XNetdata1] == 0xF1)
-			{
-				// DCC FAST CLOCK set request
-				/* 0x05 0xF1 TCODE1 TCODE2 TCODE3 TCODE4 [XOR]
-				  00mmmmmm	TCODE1, mmmmmm = denotes minutes, range 0...59.
-				  100HHHHH	TCODE2, HHHHH = denotes hours, range 0...23.
-				  01000www	TCODE3, www = denotes day of week, 0=monday, 1=tuesday, a.s.o.
-				  110fffff	TCODE4, fffff = denotes speed ratio, range 0..31. (0=stopped)
-				  */
 			}
 		}
 		// else if (XNetMsg[XNetmsg] == myDirectedOps && XNetMsg[XNetlength] >= 3) {
@@ -250,12 +187,8 @@ void XpressNetClass::receive(void)
 					}
 				}
 				break;
-			case 0x62:
-				if (XNetMsg[XNetdata1] == 0x21 && XNetMsg[XNetlength] >= 4)
-				{ // Sw Version 2.3
-				  // old version - version 1 and version 2 response.
-				}
-				else if (XNetMsg[XNetdata1] == 0x22 && XNetMsg[XNetlength] >= 5)
+			case 0x62: // Statusantwort der Zentrale - einmaliges Anmelden am Bus
+				if (XNetMsg[XNetdata1] == 0x22 && XNetMsg[XNetlength] >= 5)
 				{
 					if (XNetRun == false)
 					{ // Softwareversion anfragen
@@ -263,217 +196,18 @@ void XpressNetClass::receive(void)
 						XNetSendadd(commandVersionSequence, 3);
 						XNetRun = true;
 					}
-					Railpower = csNormal;
-					if (XNetMsg[XNetdata2] != 0)
+					// in powerup mode - wait until complete
+					if (XNetMsg[XNetdata2] != 0 && (XNetMsg[XNetdata2] & 0x40) == 0x40)
 					{
-						// is track power turned off?
-						if ((XNetMsg[XNetdata2] & 0x01) == 0x01)
-						{
-							Railpower = csEmergencyStop;
-						} // Bit 0: wenn 1, Anlage in Nothalt
-						// is it in emergency stop?
-						if ((XNetMsg[XNetdata2] & 0x02) == 0x02)
-						{
-							Railpower = csTrackVoltageOff;
-						} // Bit 1: wenn 1, Anlage in Notaus
-						// in service mode?
-						if ((XNetMsg[XNetdata2] & 0x08) == 0x08)
-						{
-							Railpower = csServiceMode;
-						} // Bit 3: wenn 1, dann Programmiermode aktiv
-						// in powerup mode - wait until complete
-						if ((XNetMsg[XNetdata2] & 0x40) == 0x40)
-						{
-							// put us in a state where we do the status request again...
-							XNetRun = false;
-						}
+						// put us in a state where we do the status request again...
+						XNetRun = false;
 					}
-					if (notifyXNetPower)
-						notifyXNetPower(Railpower);
-				}
-				break;
-			case 0x61:
-				if (XNetMsg[XNetlength] >= 4)
-				{
-					if (XNetMsg[XNetdata1] == 0x13)
-					{
-						// Programmierinfo �Daten nicht gefunden�
-						if (notifyCVInfo)
-							notifyCVInfo(0x02);
-					}
-					if (XNetMsg[XNetdata1] == 0x1F)
-					{
-						// Programmierinfo �Zentrale Busy�
-						if (notifyCVInfo)
-							notifyCVInfo(0x01);
-					}
-					if (XNetMsg[XNetdata1] == 0x11)
-					{
-						// Programmierinfo �Zentrale Bereit�
-						if (notifyCVInfo)
-							notifyCVInfo(0x00);
-					}
-					if (XNetMsg[XNetdata1] == 0x12)
-					{
-						// Programmierinfo �short-circuit�
-						if (notifyCVInfo)
-							notifyCVInfo(0x03);
-					}
-					if (XNetMsg[XNetdata1] == 0x80)
-					{
-						// Transfer Error
-						if (notifyCVInfo)
-							notifyCVInfo(0xE1);
-					}
-					if (XNetMsg[XNetdata1] == 0x82)
-					{
-						// Befehl nicht vorhanden R�ckmeldung
-					}
-				}
-				break;
-			case 0x63:
-				// Softwareversion Zentrale
-				if ((XNetMsg[XNetdata1] == 0x21) && (XNetMsg[XNetlength] >= 5))
-				{
-					if (notifyXNetVer)
-						notifyXNetVer(XNetMsg[XNetdata2], XNetMsg[XNetdata3]);
-				}
-				// Programmierinfo �Daten 3-Byte-Format� & �Daten 4-Byte-Format�
-				if ((XNetMsg[XNetdata1] == 0x10 || XNetMsg[XNetdata1] == 0x14) && XNetMsg[XNetlength] >= 5)
-				{
-					byte cvAdr = XNetMsg[XNetdata2];
-					byte cvData = XNetMsg[XNetdata3];
-					if (notifyCVResult)
-						notifyCVResult(cvAdr, cvData);
-				}
-				break;
-			case 0xE4: // Antwort der abgefragen Lok
-				if ((XNetMsg[XNetlength] >= 7) && (ReqLocoAdr != 0) && ((XNetMsg[XNetdata1] >> 4) != 0))
-				{
-					byte Adr_MSB = highByte(ReqLocoAdr);
-					byte Adr_LSB = lowByte(ReqLocoAdr);
-					ReqLocoAdr = 0;
-					uint8_t Steps = XNetMsg[XNetdata1]; // 0000 BFFF - B=Busy; F=Fahrstufen
-					bitWrite(Steps, 3, 0);				// Busy bit l�schen
-					if (Steps == B100)
-						Steps = B11;
-					boolean Busy = false;
-					if (bitRead(XNetMsg[XNetdata1], 3) == 1)
-						Busy = true;
-					uint8_t Speed = XNetMsg[XNetdata2] & 0x7F; // RVVV VVVV - R=Richtung; V=Geschwindigkeit
-					uint8_t Direction = false;
-					if (bitRead(XNetMsg[XNetdata2], 7) == 1)
-						Direction = true;
-					uint8_t F0 = XNetMsg[XNetdata3]; // 0 0 0 F0 F4 F3 F2 F1
-					uint8_t F1 = XNetMsg[XNetdata4]; // F12 F11 F10 F9 F8 F7 F6 F5
-
-					byte BSteps = Steps;
-					if (Busy)
-						bitWrite(BSteps, 3, 1);
-					byte funcsts = F0;				 // FktSts = Chg-F, X, Dir, F0, F4, F3, F2, F1
-					bitWrite(funcsts, 5, Direction); // Direction hinzuf�gen
-
-					bool chg = xLokStsadd(Adr_MSB, Adr_LSB, BSteps, Speed, funcsts); // Eintrag in SlotServer
-					chg = chg | xLokStsFunc1(Adr_MSB, Adr_LSB, F1);
-					if (chg == true) // �nderungen am Zustand?
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-
-					if (Speed == 0)
-					{								   // Lok auf Besetzt schalten
-						setLocoHalt(Adr_MSB, Adr_LSB); // Sende Lok HALT um Busy zu erzeugen!
-					}
-				}
-				else
-				{
-					byte Adr_MSB = XNetMsg[XNetdata2];
-					byte Adr_LSB = XNetMsg[XNetdata3];
-					byte Slot = xLokStsgetSlot(Adr_MSB, Adr_LSB);
-					switch (XNetMsg[XNetdata1])
-					{
-					case 0x10:
-						xLokSts[Slot].speed = XNetMsg[XNetdata4] & 0x7F; // 14 Speed steps
-						bitWrite(xLokSts[Slot].f0, 5, bitRead(XNetMsg[XNetdata4], 7));
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x11:
-						xLokSts[Slot].speed = XNetMsg[XNetdata4] & 0x7F; // 27 Speed steps
-						bitWrite(xLokSts[Slot].f0, 5, bitRead(XNetMsg[XNetdata4], 7));
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x12:
-						xLokSts[Slot].speed = XNetMsg[XNetdata4] & 0x7F; // 28 Speed steps
-						bitWrite(xLokSts[Slot].f0, 5, bitRead(XNetMsg[XNetdata4], 7));
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x13:
-						xLokSts[Slot].speed = XNetMsg[XNetdata4] & 0x7F; // 128 Speed steps
-						bitWrite(xLokSts[Slot].f0, 5, bitRead(XNetMsg[XNetdata4], 7));
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x20:
-						xLokSts[Slot].f0 = (xLokSts[Slot].f0 & 0x20) | (XNetMsg[XNetdata4] & 0x1F); // Fkt Group1	- Attention keep Direction Bit!
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x21:
-						xLokSts[Slot].f1 = (XNetMsg[XNetdata4] & 0x0F) | (xLokSts[Slot].f1 & 0xF0); // Fkt Group2
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x22:
-						xLokSts[Slot].f1 = (XNetMsg[XNetdata4] << 4) | (xLokSts[Slot].f1 & 0x0F); // Fkt Group3
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x23:
-						xLokSts[Slot].f2 = XNetMsg[XNetdata4]; // Fkt Group4 f13..f20
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x28:
-						xLokSts[Slot].f3 = XNetMsg[XNetdata4]; // Fkt Group5 f21..f28
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-						break;
-					case 0x24: // Fkt Status
-						break;
-					}
-				}
-				break;
-			case 0xE3: // Antwort abgefrage Funktionen F13-F28
-				if (XNetMsg[XNetdata1] == 0x52 && XNetMsg[XNetlength] >= 6 && ReqFktAdr != 0)
-				{ // Funktionszustadn F13 bis F28
-					byte Adr_MSB = highByte(ReqFktAdr);
-					byte Adr_LSB = lowByte(ReqFktAdr);
-					ReqFktAdr = 0;
-					byte F2 = XNetMsg[XNetdata2]; // F2 = F20 F19 F18 F17 F16 F15 F14 F13
-					byte F3 = XNetMsg[XNetdata3]; // F3 = F28 F27 F26 F25 F24 F23 F22 F21
-					if (xLokStsFunc23(Adr_MSB, Adr_LSB, F2, F3) == true)
-					{ // �nderungen am Zustand?
-						if (notifyLokFunc)
-							notifyLokFunc(Adr_MSB, Adr_LSB, F2, F3);
-						getLocoStateFull(Adr_MSB, Adr_LSB, true);
-					}
-				}
-				if (XNetMsg[XNetdata1] == 0x40 && XNetMsg[XNetlength] >= 6)
-				{ // Locomotive is being operated by another device
-					XLokStsSetBusy(XNetMsg[XNetdata2], XNetMsg[XNetdata3]);
-				}
-				break;
-			case 0xE1:
-				if (XNetMsg[XNetlength] >= 3)
-				{
-					// Fehlermeldung Lok control
-					if (notifyCVInfo)
-						notifyCVInfo(0xE1);
 				}
 				break;
 			case 0x42: // Antwort Schaltinformation
 				if (XNetMsg[XNetlength] >= 4)
 				{
 					sendSchaltinfo(true, XNetMsg[XNetdata1], XNetMsg[XNetdata2]);
-				}
-				break;
-			case 0xA3: // Locomotive is being operated by another device
-				if (XNetMsg[XNetlength] >= 4)
-				{
-					if (notifyXNetPower)
-						notifyXNetPower(XNetMsg[XNetdata1]);
 				}
 				break;
 			} // switch myDirectedOps ENDE
@@ -494,12 +228,6 @@ void XpressNetClass::receive(void)
 			if (notifyXNetStatus)
 				notifyXNetStatus(ledState);
 		}
-	}
-	// Slot Server aktualisieren
-	if (currentMillis - SlotTime > SlotInterval)
-	{
-		SlotTime = currentMillis;
-		UpdateBusySlot(); // Server Update - Anfrage nach Status�nderungen
 	}
 }
 
@@ -529,346 +257,6 @@ void XpressNetClass::sendSchaltinfo(bool schaltinfo, byte data1, byte data2)
 		if (notifyFeedback)
 			notifyFeedback(highByte(Adr + 1), lowByte(Adr + 1), Pos2);
 	}
-}
-
-//--------------------------------------------------------------------------------------------
-// Zustand der Gleisversorgung setzten
-bool XpressNetClass::setPower(byte Power)
-{
-	switch (Power)
-	{
-	case csNormal:
-	{
-		unsigned char PowerAn[] = {0x21, 0x81, 0xA0};
-		return XNetSendadd(PowerAn, 3);
-	}
-	case csEmergencyStop:
-	{
-		unsigned char EmStop[] = {0x80, 0x80};
-		return XNetSendadd(EmStop, 2);
-	}
-	case csTrackVoltageOff:
-	{
-		unsigned char PowerAus[] = {0x21, 0x80, 0xA1};
-		return XNetSendadd(PowerAus, 3);
-	}
-		/*		case csShortCircuit:
-					return false;
-				case csServiceMode:
-					return false;	*/
-	}
-	return false;
-}
-
-//--------------------------------------------------------------------------------------------
-// Abfrage letzte Meldung �ber Gleispannungszustand
-byte XpressNetClass::getPower()
-{
-	return Railpower;
-}
-
-//--------------------------------------------------------------------------------------------
-// Halt Befehl weiterleiten
-void XpressNetClass::setHalt()
-{
-	setPower(csEmergencyStop);
-}
-
-//--------------------------------------------------------------------------------------------
-// Abfragen der Lokdaten (mit F0 bis F12)
-bool XpressNetClass::getLocoInfo(byte Adr_High, byte Adr_Low)
-{
-	bool ok = false;
-
-	getLocoStateFull(Adr_High, Adr_Low, false);
-
-	byte Slot = xLokStsgetSlot(Adr_High, Adr_Low);
-	if (xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++; // aktivit�t
-
-	if (xLokStsBusy(Slot) == true && ReqLocoAdr == 0)
-	{										  // Besetzt durch anderen XPressNet Handregler
-		ReqLocoAdr = word(Adr_High, Adr_Low); // Speichern der gefragen Lok Adresse
-		unsigned char getLoco[] = {0xE3, 0x00, Adr_High, Adr_Low, 0x00};
-		if (ReqLocoAdr > 99)
-			getLoco[2] = Adr_High | 0xC0;
-		getXOR(getLoco, 5);
-		ok = XNetSendadd(getLoco, 5);
-	}
-
-	return ok;
-}
-
-//--------------------------------------------------------------------------------------------
-// Abfragen der Lok Funktionszust�nde F13 bis F28
-bool XpressNetClass::getLocoFunc(byte Adr_High, byte Adr_Low)
-{
-	if (ReqFktAdr == 0)
-	{
-		ReqFktAdr = word(Adr_High, Adr_Low); // Speichern der gefragen Lok Adresse
-		unsigned char getLoco[] = {0xE3, 0x09, Adr_High, Adr_Low, 0x00};
-		if (word(Adr_High, Adr_Low) > 99)
-			getLoco[2] = Adr_High | 0xC0;
-		getXOR(getLoco, 5);
-		return XNetSendadd(getLoco, 5);
-	}
-	unsigned char getLoco[] = {0xE3, 0x09, highByte(ReqFktAdr), lowByte(ReqFktAdr), 0x00};
-	if (ReqFktAdr > 99)
-		getLoco[2] = highByte(ReqFktAdr) | 0xC0;
-	getXOR(getLoco, 5);
-	return XNetSendadd(getLoco, 5);
-}
-
-//--------------------------------------------------------------------------------------------
-// Lok Stoppen
-bool XpressNetClass::setLocoHalt(byte Adr_High, byte Adr_Low)
-{
-	bool ok = false;
-	unsigned char setLocoStop[] = {0x92, Adr_High, Adr_Low, 0x00};
-	if (word(Adr_High, Adr_Low) > 99)
-		setLocoStop[2] = Adr_High | 0xC0;
-	getXOR(setLocoStop, 4);
-	ok = XNetSendadd(setLocoStop, 4);
-
-	byte Slot = xLokStsgetSlot(Adr_High, Adr_Low);
-	xLokSts[Slot].speed = 0; // STOP
-
-	getLocoStateFull(Adr_High, Adr_Low, true);
-	return ok;
-}
-
-//--------------------------------------------------------------------------------------------
-// Lokdaten setzten
-bool XpressNetClass::setLocoDrive(byte Adr_High, byte Adr_Low, uint8_t Steps, uint8_t Speed)
-{
-	bool ok = false;
-	unsigned char setLoco[] = {0xE4, 0x10, Adr_High, Adr_Low, Speed, 0x00};
-	if (word(Adr_High, Adr_Low) > 99)
-		setLoco[2] = Adr_High | 0xC0;
-	setLoco[1] |= Steps;
-
-	getXOR(setLoco, 6);
-	ok = XNetSendadd(setLoco, 6);
-
-	byte Slot = xLokStsgetSlot(Adr_High, Adr_Low);
-	xLokSts[Slot].mode = (xLokSts[Slot].mode & B11111100) | Steps; // Fahrstufen
-	xLokSts[Slot].speed = Speed & B01111111;
-	bitWrite(xLokSts[Slot].f0, 5, bitRead(Speed, 7)); // Dir
-
-	//	getLocoStateFull(Adr_High, Adr_Low, true);
-
-	// Nutzung protokollieren:
-	if (xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++; // aktivit�t
-	return ok;
-}
-
-//--------------------------------------------------------------------------------------------
-// Lokfunktion setzten
-bool XpressNetClass::setLocoFunc(byte Adr_High, byte Adr_Low, uint8_t type, uint8_t fkt)
-{
-	bool ok = false; // Funktion wurde nicht gesetzt!
-	bool fktbit = 0; // neue zu �ndernde fkt bit
-	if (type == 1)	 // ein
-		fktbit = 1;
-	byte Slot = xLokStsgetSlot(Adr_High, Adr_Low);
-	// zu �nderndes bit bestimmen und neu setzten:
-	if (fkt <= 4)
-	{
-		byte func = xLokSts[Slot].f0 & B00011111; // letztes Zustand der Funktionen 000 F0 F4..F1
-		if (type == 2)
-		{ // um
-			if (fkt == 0)
-				fktbit = !(bitRead(func, 4));
-			else
-				fktbit = !(bitRead(func, fkt - 1));
-		}
-		if (fkt == 0)
-			bitWrite(func, 4, fktbit);
-		else
-			bitWrite(func, fkt - 1, fktbit);
-		// Daten �ber XNet senden:
-		unsigned char setLocoFunc[] = {0xE4, 0x20, Adr_High, Adr_Low, func, 0x00}; // Gruppe1 = 0 0 0 F0 F4 F3 F2 F1
-		if (word(Adr_High, Adr_Low) > 99)
-			setLocoFunc[2] = Adr_High | 0xC0;
-		getXOR(setLocoFunc, 6);
-		ok = XNetSendadd(setLocoFunc, 6);
-		// Slot anpassen:
-		if (fkt == 0)
-			bitWrite(xLokSts[Slot].f0, 4, fktbit);
-		else
-			bitWrite(xLokSts[Slot].f0, fkt - 1, fktbit);
-	}
-	else if ((fkt >= 5) && (fkt <= 8))
-	{
-		byte funcG2 = xLokSts[Slot].f1 & 0x0F; // letztes Zustand der Funktionen 0000 F8..F5
-		if (type == 2)						   // um
-			fktbit = !(bitRead(funcG2, fkt - 5));
-		bitWrite(funcG2, fkt - 5, fktbit);
-		// Daten �ber XNet senden:
-		unsigned char setLocoFunc[] = {0xE4, 0x21, Adr_High, Adr_Low, funcG2, 0x00}; // Gruppe2 = 0 0 0 0 F8 F7 F6 F5
-		if (word(Adr_High, Adr_Low) > 99)
-			setLocoFunc[2] = Adr_High | 0xC0;
-		getXOR(setLocoFunc, 6);
-		ok = XNetSendadd(setLocoFunc, 6);
-		// Slot anpassen:
-		bitWrite(xLokSts[Slot].f1, fkt - 5, fktbit);
-	}
-	else if ((fkt >= 9) && (fkt <= 12))
-	{
-		byte funcG3 = xLokSts[Slot].f1 >> 4; // letztes Zustand der Funktionen 0000 F12..F9
-		if (type == 2)						 // um
-			fktbit = !(bitRead(funcG3, fkt - 9));
-		bitWrite(funcG3, fkt - 9, fktbit);
-		// Daten �ber XNet senden:
-		unsigned char setLocoFunc[] = {0xE4, 0x22, Adr_High, Adr_Low, funcG3, 0x00}; // Gruppe3 = 0 0 0 0 F12 F11 F10 F9
-		if (word(Adr_High, Adr_Low) > 99)
-			setLocoFunc[2] = Adr_High | 0xC0;
-		getXOR(setLocoFunc, 6);
-		ok = XNetSendadd(setLocoFunc, 6);
-		// Slot anpassen:
-		bitWrite(xLokSts[Slot].f1, fkt - 9 + 4, fktbit);
-	}
-	else if ((fkt >= 13) && (fkt <= 20))
-	{
-		byte funcG4 = xLokSts[Slot].f2;
-		if (type == 2) // um
-			fktbit = !(bitRead(funcG4, fkt - 13));
-		bitWrite(funcG4, fkt - 13, fktbit);
-		// Daten �ber XNet senden:
-		// unsigned char setLocoFunc[] = {0xE4, 0x23, Adr_High, Adr_Low, funcG4, 0x00};	//Gruppe4 = F20 F19 F18 F17 F16 F15 F14 F13
-		unsigned char setLocoFunc[] = {0xE4, 0xF3, Adr_High, Adr_Low, funcG4, 0x00}; // Gruppe4 = F20 F19 F18 F17 F16 F15 F14 F13
-		// 0xF3 = undocumented command is used when a mulitMAUS is controlling functions f20..f13.
-		if (word(Adr_High, Adr_Low) > 99)
-			setLocoFunc[2] = Adr_High | 0xC0;
-		getXOR(setLocoFunc, 6);
-		ok = XNetSendadd(setLocoFunc, 6);
-		// Slot anpassen:
-		bitWrite(xLokSts[Slot].f2, (fkt - 13), fktbit);
-	}
-	else if ((fkt >= 21) && (fkt <= 28))
-	{
-		byte funcG5 = xLokSts[Slot].f3;
-		if (type == 2) // um
-			fktbit = !(bitRead(funcG5, fkt - 21));
-		bitWrite(funcG5, fkt - 21, fktbit);
-		// Daten �ber XNet senden:
-		unsigned char setLocoFunc[] = {0xE4, 0x28, Adr_High, Adr_Low, funcG5, 0x00}; // Gruppe5 = F28 F27 F26 F25 F24 F23 F22 F21
-		if (word(Adr_High, Adr_Low) > 99)
-			setLocoFunc[2] = Adr_High | 0xC0;
-		getXOR(setLocoFunc, 6);
-		ok = XNetSendadd(setLocoFunc, 6);
-		// Slot anpassen:
-		bitWrite(xLokSts[Slot].f3, (fkt - 21), fktbit);
-	}
-	getLocoStateFull(Adr_High, Adr_Low, true); // Alle aktiven Ger�te Senden!
-	return ok;
-}
-
-//--------------------------------------------------------------------------------------------
-// Gruppe 1: 0 0 0 F0 F4 F3 F2 F1
-bool XpressNetClass::setFunc0to4(uint16_t Adr, uint8_t G1)
-{
-	unsigned char setLocoFunc[] = {0xE4, 0x20, 0x00, 0x00, G1, 0x00};
-	if (Adr > 99) // Xpressnet long addresses (100 to 9999: AH/AL = 0xC064 to 0xE707)
-		setLocoFunc[2] = (Adr >> 8) | 0xC0;
-	else
-		setLocoFunc[2] = Adr >> 8; // short addresses (0 to 99: AH = 0x0000 and AL = 0x0000 to 0x0063)
-	setLocoFunc[3] = Adr & 0xFF;
-	// Slot anpassen:
-	xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f0 = G1 & 0x1F;
-	getXOR(setLocoFunc, 6);
-	return XNetSendadd(setLocoFunc, 6);
-}
-
-//--------------------------------------------------------------------------------------------
-// Gruppe 2: 0 0 0 0 F8 F7 F6 F5
-bool XpressNetClass::setFunc5to8(uint16_t Adr, uint8_t G2)
-{
-	unsigned char setLocoFunc[] = {0xE4, 0x21, 0x00, 0x00, G2, 0x00};
-	if (Adr > 99) // Xpressnet long addresses (100 to 9999: AH/AL = 0xC064 to 0xE707)
-		setLocoFunc[2] = (Adr >> 8) | 0xC0;
-	else
-		setLocoFunc[2] = Adr >> 8; // short addresses (0 to 99: AH = 0x0000 and AL = 0x0000 to 0x0063)
-	setLocoFunc[3] = Adr & 0xFF;
-	// Slot anpassen:
-	xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f1 = (G2 & 0x0F) | (xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f1 & 0xF0); // F12..F9-F8..F5
-	getXOR(setLocoFunc, 6);
-	return XNetSendadd(setLocoFunc, 6);
-}
-
-//--------------------------------------------------------------------------------------------
-// Gruppe 3: 0 0 0 0 F12 F11 F10 F9
-bool XpressNetClass::setFunc9to12(uint16_t Adr, uint8_t G3)
-{
-	unsigned char setLocoFunc[] = {0xE4, 0x22, 0x00, 0x00, G3, 0x00};
-	if (Adr > 99) // Xpressnet long addresses (100 to 9999: AH/AL = 0xC064 to 0xE707)
-		setLocoFunc[2] = (Adr >> 8) | 0xC0;
-	else
-		setLocoFunc[2] = Adr >> 8; // short addresses (0 to 99: AH = 0x0000 and AL = 0x0000 to 0x0063)
-	setLocoFunc[3] = Adr & 0xFF;
-	// Slot anpassen:
-	xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f1 = (G3 << 4) | (xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f1 & 0x0F); // F12..F9-F8..F5
-	getXOR(setLocoFunc, 6);
-	return XNetSendadd(setLocoFunc, 6);
-}
-
-//--------------------------------------------------------------------------------------------
-// Gruppe 4: F20 F19 F18 F17 F16 F15 F14 F13
-bool XpressNetClass::setFunc13to20(uint16_t Adr, uint8_t G4)
-{
-	unsigned char setLocoFunc[] = {0xE4, 0xF3, 0x00, 0x00, G4, 0x00};
-	if (Adr > 99) // Xpressnet long addresses (100 to 9999: AH/AL = 0xC064 to 0xE707)
-		setLocoFunc[2] = (Adr >> 8) | 0xC0;
-	else
-		setLocoFunc[2] = Adr >> 8; // short addresses (0 to 99: AH = 0x0000 and AL = 0x0000 to 0x0063)
-	setLocoFunc[3] = Adr & 0xFF;
-	// Slot anpassen:
-	xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f2 = G4;
-	getXOR(setLocoFunc, 6);
-	XNetSendadd(setLocoFunc, 6);
-
-	setLocoFunc[0] = 0xE4;
-	setLocoFunc[1] = 0x23; // MultiMaus only
-	setLocoFunc[2] = Adr >> 8;
-	setLocoFunc[3] = Adr & 0xFF;
-	setLocoFunc[4] = G4;
-	getXOR(setLocoFunc, 6);
-	return XNetSendadd(setLocoFunc, 6);
-}
-
-//--------------------------------------------------------------------------------------------
-// Gruppe 5: F28 F27 F26 F25 F24 F23 F22 F21
-bool XpressNetClass::setFunc21to28(uint16_t Adr, uint8_t G5)
-{
-	unsigned char setLocoFunc[] = {0xE4, 0x28, 0x00, 0x00, G5, 0x00};
-	if (Adr > 99) // Xpressnet long addresses (100 to 9999: AH/AL = 0xC064 to 0xE707)
-		setLocoFunc[2] = (Adr >> 8) | 0xC0;
-	else
-		setLocoFunc[2] = Adr >> 8; // short addresses (0 to 99: AH = 0x0000 and AL = 0x0000 to 0x0063)
-	setLocoFunc[3] = Adr & 0xFF;
-	// Slot anpassen:
-	xLokSts[xLokStsgetSlot(setLocoFunc[2], setLocoFunc[3])].f3 = G5;
-	getXOR(setLocoFunc, 6);
-	return XNetSendadd(setLocoFunc, 6);
-}
-
-//--------------------------------------------------------------------------------------------
-// Gibt aktuellen Lokstatus an Anfragenden Zur�ck
-void XpressNetClass::getLocoStateFull(byte Adr_High, byte Adr_Low, bool bc)
-{
-	byte Slot = xLokStsgetSlot(Adr_High, Adr_Low);
-	byte Busy = bitRead(xLokSts[Slot].mode, 3);
-	byte Dir = bitRead(xLokSts[Slot].f0, 5);
-	byte F0 = xLokSts[Slot].f0 & B00011111;
-	byte F1 = xLokSts[Slot].f1;
-	byte F2 = xLokSts[Slot].f2;
-	byte F3 = xLokSts[Slot].f3;
-	if (notifyLokAll)
-		notifyLokAll(Adr_High, Adr_Low, Busy, xLokSts[Slot].mode & B11, xLokSts[Slot].speed & 0x7F, Dir, F0, F1, F2, F3, bc);
-	// Nutzung protokollieren:
-	if (xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++; // aktivit�t
 }
 
 //--------------------------------------------------------------------------------------------
@@ -907,37 +295,6 @@ bool XpressNetClass::setTrntPos(byte FAdr_High, byte FAdr_Low, byte Pos)
 		notifyTrnt(FAdr_High, FAdr_Low, (Pos & B1) + 1);
 
 	return XNetSendadd(setTrnt, 4);
-}
-
-//--------------------------------------------------------------------------------------------
-// CV-Mode CV Lesen
-void XpressNetClass::readCVMode(byte CV)
-{
-	unsigned char cvRead[] = {0x22, 0x15, CV, 0x00};
-	getXOR(cvRead, 4);
-	XNetSendadd(cvRead, 4);
-	getresultCV(); // Programmierergebnis anfordern
-}
-
-//--------------------------------------------------------------------------------------------
-// Schreiben einer CV im CV-Mode
-void XpressNetClass::writeCVMode(byte CV, byte Data)
-{
-	unsigned char cvWrite[] = {0x23, 0x16, CV, Data, 0x00};
-	getXOR(cvWrite, 5);
-	XNetSendadd(cvWrite, 5);
-	// getresultCV(); //Programmierergebnis anfordern
-
-	if (notifyCVResult)
-		notifyCVResult(CV, Data);
-}
-
-//--------------------------------------------------------------------------------------------
-// Programmierergebnis anfordern
-void XpressNetClass::getresultCV()
-{
-	unsigned char getresult[] = {0x21, 0x10, 0x31};
-	XNetSendadd(getresult, 3);
 }
 
 // Private Methods ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1157,15 +514,12 @@ void XpressNetClass::XNetget()
 			{
 				unsigned char requestAckAck[] = {0x20, 0x20};
 				XNetsend(requestAckAck, 2);
-				// Transfer Error
-				if (notifyCVInfo)
-					notifyCVInfo(0xE1);
 				return; // Daten wurden verarbeitet
 			}
 			else if (rxdata == myCallByteInquiry)
 			{
 				unsigned char commandStatusSequence[] = {0x21, 0x24, 0x05};
-				if (XNetRun == false || Railpower == 0xFF)
+				if (XNetRun == false)
 				{
 					XNetsend(commandStatusSequence, 3);
 				}
@@ -1271,279 +625,4 @@ void XpressNetClass::XNetsend(unsigned char *dataString, byte byteCount)
 #if defined(ESP8266) || defined(ESP32)
 	XNetSerial.enableTx(false);
 #endif
-}
-
-/*
-***************************************** SLOTSERVER ****************************************
-	uint8_t low;		// A7, A6, A5, A4, A3, A2, A1, A0
-	uint8_t high;		//X, X, A13, A12, A11, A10, A9, A8
-	uint8_t speed;		//Speed 0..127 (0x00 - 0x7F)
-	uint8_t f0;		//0, 0, Dir, F0, F4, F3, F2, F1
-	uint8_t f1;
-	uint8_t func3;
-	uint8_t func4;
-	uint8_t state;	//Zahl der Zugriffe
-*/
-
-//--------------------------------------------------------------------------------------------
-void XpressNetClass::UpdateBusySlot(void) // Fragt Zentrale nach aktuellen Zust�nden
-{
-	/*
-		if (ReqLocoAdr == 0) {
-			if (xLokStsIsEmpty(SlotLast) == false && xLokSts[SlotLast].state > 0 && xLokStsBusy(SlotLast) == true) {
-				byte Adr_High = xLokSts[SlotLast].high & 0x3F;
-				byte Adr_Low = xLokSts[SlotLast].low;
-				ReqLocoAdr = word(Adr_High, Adr_Low); //Speichern der gefragen Lok Adresse
-				unsigned char getLoco[] = {0xE3, 0x00, Adr_High, Adr_Low, 0x00};
-				getXOR(getLoco, 5);
-				XNetSendadd (getLoco, 5);
-	//			if (bitRead(xLokSts[SlotLast].mode, 3) == 1)	//Slot BUSY?
-					getLocoFunc (Adr_High, Adr_Low);	//F13 bis F28 abfragen
-			}
-			int Slot = SlotLast;
-			SlotLast = getNextSlot(SlotLast);	//n�chste Lok holen
-			while (SlotLast != Slot) {
-				if (xLokStsBusy(SlotLast) == true) {
-					Slot = SlotLast;
-					break;
-				}
-				SlotLast = getNextSlot(SlotLast);	//n�chste Lok holen
-			}
-
-		}
-		else
-	*/
-	if (ReqLocoAdr != 0)
-	{
-		ReqLocoAgain++;
-		if (ReqLocoAgain > 9)
-		{
-			unsigned char getLoco[] = {0xE3, 0x00, highByte(ReqLocoAdr), lowByte(ReqLocoAdr), 0x00};
-			if (ReqLocoAdr > 99)
-				getLoco[2] = highByte(ReqLocoAdr) | 0xC0;
-			getXOR(getLoco, 5);
-			XNetSendadd(getLoco, 5);
-			ReqLocoAgain = 0;
-		}
-	}
-	/*
-		//Nichtnutzung von Slots erfassen:
-		for (int i = 0; i < SlotMax; i++) {
-			if (xLokSts[i].state > 0)
-				xLokSts[i].state--;
-			if (xLokSts[i].state > 0)
-				xLokSts[i].state--;
-		}
-	*/
-}
-
-//--------------------------------------------------------------------------------------------
-void XpressNetClass::xLokStsclear(void) // l�scht alle Slots
-{
-	for (int i = 0; i < SlotMax; i++)
-	{
-		xLokSts[i].low = 0xFF;
-		xLokSts[i].high = 0xFF;
-		xLokSts[i].mode = 0xFF;
-		xLokSts[i].speed = 0xFF;
-		xLokSts[i].f0 = 0xFF;
-		xLokSts[i].f1 = 0xFF;
-		xLokSts[i].f2 = 0xFF;
-		xLokSts[i].f3 = 0xFF;
-		xLokSts[i].state = 0x00;
-	}
-}
-
-//--------------------------------------------------------------------------------------------
-bool XpressNetClass::xLokStsadd(byte MSB, byte LSB, byte Mode, byte Speed, byte FktSts) // Eintragen �nderung / neuer Slot XLok
-{
-	bool change = false;
-	byte Slot = xLokStsgetSlot(MSB, LSB);
-	if (xLokSts[Slot].mode != Mode)
-	{ // Busy & Fahrstufe (keine 14 Fahrstufen!)
-		xLokSts[Slot].mode = Mode;
-		change = true;
-	}
-	if (xLokSts[Slot].speed != Speed)
-	{
-		xLokSts[Slot].speed = Speed;
-		change = true;
-	}
-	// FktSts = X, X, Dir, F0, F4, F3, F2, F1
-	if (xLokSts[Slot].f0 != FktSts)
-	{
-		xLokSts[Slot].f0 = FktSts;
-		change = true;
-	}
-	if (change == true && xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++;
-
-	return change;
-}
-
-//--------------------------------------------------------------------------------------------
-bool XpressNetClass::xLokStsFunc0(byte MSB, byte LSB, byte Func) // Eintragen �nderung / neuer Slot XFunc
-{
-	bool change = false;
-	byte Slot = xLokStsgetSlot(MSB, LSB);
-	if ((xLokSts[Slot].f0 & B00011111) != Func)
-	{
-		xLokSts[Slot].f0 = Func | (xLokSts[Slot].f0 & B00100000); // Dir anh�ngen!
-		change = true;
-	}
-	if (change == true && xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++;
-	return change;
-}
-
-//--------------------------------------------------------------------------------------------
-bool XpressNetClass::xLokStsFunc1(byte MSB, byte LSB, byte Func1) // Eintragen �nderung / neuer Slot XFunc1
-{
-	bool change = false;
-	byte Slot = xLokStsgetSlot(MSB, LSB);
-	if (xLokSts[Slot].f1 != Func1)
-	{
-		xLokSts[Slot].f1 = Func1;
-		change = true;
-	}
-	if (change == true && xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++;
-	return change;
-}
-
-//--------------------------------------------------------------------------------------------
-bool XpressNetClass::xLokStsFunc23(byte MSB, byte LSB, byte Func2, byte Func3) // Eintragen �nderung / neuer Slot
-{
-	bool change = false;
-	byte Slot = xLokStsgetSlot(MSB, LSB);
-	if (xLokSts[Slot].f2 != Func2)
-	{
-		xLokSts[Slot].f2 = Func2;
-		change = true;
-	}
-	if (xLokSts[Slot].f3 != Func3)
-	{
-		xLokSts[Slot].f3 = Func3;
-		change = true;
-	}
-	if (change == true && xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++;
-	return change;
-}
-
-bool XpressNetClass::xLokStsBusy(byte Slot)
-{
-	bool Busy = false;
-	if (bitRead(xLokSts[Slot].mode, 3) == 1)
-		Busy = true;
-	return Busy;
-}
-
-void XpressNetClass::XLokStsSetBusy(byte MSB, byte LSB)
-{
-	byte Slot = xLokStsgetSlot(MSB, LSB);
-	bitWrite(xLokSts[Slot].mode, 3, 1);
-	if (xLokSts[Slot].state < 0xFF)
-		xLokSts[Slot].state++;
-}
-
-//--------------------------------------------------------------------------------------------
-byte XpressNetClass::xLokStsgetSlot(byte MSB, byte LSB) // gibt Slot f�r Adresse zur�ck / erzeugt neuen Slot (0..126)
-{
-	byte Slot = 0x00; // kein Slot gefunden!
-	for (int i = 0; i < SlotMax; i++)
-	{
-		if ((xLokSts[i].low == LSB && xLokSts[i].high == MSB) || xLokStsIsEmpty(i))
-		{
-			Slot = i; // Slot merken
-			if (xLokStsIsEmpty(Slot))
-			{								   // neuer freier Slot - Lok eintragen
-				xLokStsSetNew(Slot, MSB, LSB); // Eintragen
-			}
-			return Slot;
-		}
-	}
-	// kein Slot mehr vorhanden!
-	byte zugriff = 0xFF;
-	for (int i = 0; i < SlotMax; i++)
-	{
-		if (xLokSts[i].state < zugriff)
-		{
-			Slot = i;
-			zugriff = xLokSts[i].state;
-		}
-	}
-	xLokStsSetNew(Slot, MSB, LSB); // Eintragen
-	return Slot;
-}
-
-//--------------------------------------------------------------------------------------------
-int XpressNetClass::xLokStsgetAdr(byte Slot) // gibt Lokadresse des Slot zur�ck, wenn 0x0000 dann keine Lok vorhanden
-{
-	if (!xLokStsIsEmpty(Slot))
-		return word(xLokSts[Slot].high, xLokSts[Slot].low); // Addresse zur�ckgeben
-	return 0x0000;
-}
-
-//--------------------------------------------------------------------------------------------
-bool XpressNetClass::xLokStsIsEmpty(byte Slot) // pr�ft ob Datenpacket/Slot leer ist?
-{
-	if (xLokSts[Slot].low == 0xFF && xLokSts[Slot].high == 0xFF && xLokSts[Slot].speed == 0xFF && xLokSts[Slot].f0 == 0xFF &&
-		xLokSts[Slot].f1 == 0xFF && xLokSts[Slot].f2 == 0xFF && xLokSts[Slot].f3 == 0xFF && xLokSts[Slot].state == 0x00)
-		return true;
-	return false;
-}
-
-//--------------------------------------------------------------------------------------------
-void XpressNetClass::xLokStsSetNew(byte Slot, byte MSB, byte LSB) // Neue Lok eintragen mit Adresse
-{
-	/*
-	//Lok Info Abfragen
-	ReqLocoAdr = word(MSB, LSB); //Speichern der gefragen Lok Adresse
-	unsigned char getLoco[] = {0xE3, 0x00, MSB, LSB, 0x00};
-	if (ReqLocoAdr > 99)
-		getLoco[2] = MSB | 0xC0;
-	getXOR(getLoco, 5);
-	XNetSendadd (getLoco, 5);
-	getLocoFunc (MSB, LSB);	//F13 bis F28 abfragen
-	*/
-	xLokSts[Slot].low = LSB;
-	xLokSts[Slot].high = MSB;
-	xLokSts[Slot].mode = B1011; // Busy und 128 Fahrstufen
-	xLokSts[Slot].speed = 0x00;
-	xLokSts[Slot].f0 = 0x00;
-	xLokSts[Slot].f1 = 0x00;
-	xLokSts[Slot].f2 = 0x00;
-	xLokSts[Slot].f3 = 0x00;
-	xLokSts[Slot].state = 0x00;
-}
-
-//--------------------------------------------------------------------------------------------
-byte XpressNetClass::getNextSlot(byte Slot) // gibt n�chsten genutzten Slot
-{
-	byte nextS = Slot;
-	for (int i = 0; i < SlotMax; i++)
-	{
-		nextS++; // n�chste Lok
-		if (nextS >= SlotMax)
-			nextS = 0; // Beginne von vorne
-		if (xLokStsIsEmpty(nextS) == false)
-			return nextS;
-	}
-	return nextS;
-}
-
-//--------------------------------------------------------------------------------------------
-void XpressNetClass::setFree(byte MSB, byte LSB) // Lok aus Slot nehmen
-{
-	byte Slot = xLokStsgetSlot(MSB, LSB);
-	xLokSts[Slot].low = 0xFF;
-	xLokSts[Slot].high = 0xFF;
-	xLokSts[Slot].mode = 0xFF;
-	xLokSts[Slot].speed = 0xFF;
-	xLokSts[Slot].f0 = 0xFF;
-	xLokSts[Slot].f1 = 0xFF;
-	xLokSts[Slot].f2 = 0xFF;
-	xLokSts[Slot].f3 = 0xFF;
-	xLokSts[Slot].state = 0x00;
 }

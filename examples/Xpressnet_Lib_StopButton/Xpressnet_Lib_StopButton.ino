@@ -1,7 +1,9 @@
 /*
   XpressNet for Arduino
   
-  Showing the funktion of the Library for a Railpower OFF Button
+  Showing the funktion of the Library for a single push-button Turnout toggle
+  (adapted: the trimmed library no longer supports track power control,
+  so the button now toggles a Turnout instead of switching Power OFF)
 
   The circuit:
  * LED attached from pin 13 to ground and from pin 12 to ground
@@ -20,11 +22,12 @@ XpressNetClass XpressNet;
 // give it a name:
 byte LedPin = 13;
 
-byte PowerLedPin = 12;  //Signalisiert den Gleisspannungszustand
+byte TurnoutLedPin = 12;  //Signalisiert die letzte Weichenstellung
 
-byte ButtonPin = 2;     //Taster zum Abschalten der Gleisspannung
+byte ButtonPin = 2;     //Taster zum Umschalten der Weiche
 
 byte lastButtonState = HIGH;    // variable for reading the Button status
+byte turnoutState = LOW;        // toggelt bei jedem Tastendruck
 
 //--------------------------------------------------------------
 // XpressNet address: must be in range of 1-31; must be unique. Note that some IDs
@@ -33,6 +36,8 @@ byte lastButtonState = HIGH;    // variable for reading the Button status
 #define XNetAddress 30    //Adresse im XpressNet
 #define XNetSRPin 5       //Max485 Busdriver Send/Receive-PIN
 
+#define SwitchAdr 18      //Adresse der Beispielweiche
+
 //--------------------------------------------------------------------------------------------
 // the setup routine runs once when you press reset:
 void setup() {                
@@ -40,8 +45,8 @@ void setup() {
   pinMode(LedPin, OUTPUT);
   digitalWrite(LedPin, HIGH); 
   
-  pinMode(PowerLedPin, OUTPUT);
-  digitalWrite(PowerLedPin, LOW);
+  pinMode(TurnoutLedPin, OUTPUT);
+  digitalWrite(TurnoutLedPin, LOW);
 
   pinMode(ButtonPin, INPUT);
   digitalWrite(ButtonPin, HIGH);  //Pull_Up
@@ -63,8 +68,8 @@ void CheckButton()
   // read the state of the pushbutton value:
   if (digitalRead(ButtonPin) == LOW && lastButtonState == HIGH) { //down
     lastButtonState = LOW;  //save state
-    if (XpressNet.getPower() != csTrackVoltageOff)  //just send when State is not Power OFF
-      XpressNet.setPower(csTrackVoltageOff);
+    turnoutState = !turnoutState;
+    XpressNet.setTrntPos(0, SwitchAdr, turnoutState ? B1000 : B0000);
   }
   if (digitalRead(ButtonPin) == HIGH && lastButtonState == LOW) { //up
     lastButtonState = HIGH; //save state
@@ -80,13 +85,12 @@ void notifyXNetStatus (uint8_t State)
 }
 
 //--------------------------------------------------------------------------------------------
-void notifyXNetPower (uint8_t State)
+void notifyTrnt(uint8_t Adr_High, uint8_t Adr_Low, uint8_t Pos)
 {
-  switch (State) {
-    case csNormal: digitalWrite(PowerLedPin, HIGH); break;
-    case csTrackVoltageOff: digitalWrite(PowerLedPin, LOW); break;
-    case csEmergencyStop: digitalWrite(PowerLedPin, HIGH); break;
-    case csShortCircuit: digitalWrite(PowerLedPin, LOW); break;
-    case csServiceMode: digitalWrite(PowerLedPin, LOW); break;
+  if (Adr_Low == SwitchAdr) {
+    if (Pos == B10)
+      digitalWrite(TurnoutLedPin, LOW);
+    if (Pos == B01)  
+      digitalWrite(TurnoutLedPin, HIGH);  
   }
 }
