@@ -128,7 +128,7 @@ class XpressNetClass
   public:
     XpressNetClass(void);	//Constuctor
 	#if defined(ESP8266) || (ESP32)
-	void start(byte XAdr, uint8_t XNetSerial_Port, uint8_t XControl);  //Initialisierung Serial
+	void start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl);  //Initialisierung Serial
 	#else
 	void start(byte XAdr, uint8_t XControl);  //Initialisierung Serial
 	#endif
