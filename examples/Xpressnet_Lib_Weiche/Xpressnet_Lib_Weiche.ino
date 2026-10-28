@@ -1,103 +1,87 @@
 /*
-  XpressNet for Arduino
-  
-  Showing the funktion of the Library for a Switch control
-  The circuit:
- * LED and resistor attached from pin 13 to ground 
- * LED and resistor attached from pin 12 to ground (switch staight)
- * LED and resistor attached from pin 12 to +5V (switch turn)
- * pushbutton attached to pin 2 from +5V and 10K resistor attached to pin 2 from ground
- 
- * * Note: on most Arduinos there is already an LED on the board
-     attached to pin 13.
-  
+  XpressNet dla ESP32
+
+  Pokazuje sterowanie zwrotnicą dwoma przyciskami.
+  Układ:
+ * dioda stanu z rezystorem od LedPin do masy
+ * dioda z rezystorem od SwitchLedPin do masy (świeci = zwrotnica na wprost)
+ * przyciski od ButtonSPin / ButtonTurnPin do masy (wewnętrzny pull-up)
 */
 
-#include <XpressNet.h> 
+#include <XpressNet.h>
 XpressNetClass XpressNet;
 
-// Pin 13 has an LED connected on most Arduino boards.
-// give it a name:
-byte LedPin = 13;
+#define LedPin 15         //dioda stanu
+#define SwitchLedPin 16   //sygnalizuje położenie zwrotnicy
+#define ButtonSPin 10     //przycisk: zwrotnica na wprost
+#define ButtonTurnPin 11  //przycisk: zwrotnica na bok
 
-byte SwitchLedPin = 12;  //Signalisiert den Weichenzustand
+byte lastButtonSState = HIGH;    // poprzedni stan przycisku
+byte lastButtonTurnState = HIGH;    // poprzedni stan przycisku
 
-byte ButtonSPin = 2;     //Taster zum Abschalten der Gleisspannung
-byte ButtonTurnPin = 3;     //Taster zum Abschalten der Gleisspannung
-
-byte lastButtonSState = HIGH;    // variable for reading the Button status
-byte lastButtonTurnState = HIGH;    // variable for reading the Button status
-
-unsigned long previousMillis = 0;        // will store last time LED was updated
-const long interval = 1000;           // interval at which to blink (milliseconds)
+unsigned long previousMillis = 0;        // czas ostatniego zapytania o położenie
+const long interval = 1000;           // odstęp między zapytaniami (ms)
 //--------------------------------------------------------------
-// XpressNet address: must be in range of 1-31; must be unique. Note that some IDs
-// are currently used by default, like 2 for a LH90 or LH100 out of the box, or 30
-// for PC interface devices like the XnTCP.
-#define XNetAddress 30    //Adresse im XpressNet
-#define XNetSRPin 5       //Max485 Busdriver Send/Receive-PIN
+// Adres XpressNet: 1-31, musi być unikalny. Niektóre adresy są zajęte domyślnie,
+// np. 2 przez LH90/LH100 prosto z pudełka albo 30 przez interfejsy PC, takie jak XnTCP.
+#define XNetAddress 30    //adres w XpressNet
+#define XNetRxPin 8       //RS485 RO
+#define XNetTxPin 9       //RS485 DI
+#define XNetSRPin 12      //RS485 DE/RE - przełączanie nadawanie/odbiór
 
-#define SwitchAdr 18      //Adresse der Beispielweiche
+#define SwitchAdr 18      //adres przykładowej zwrotnicy
 
 //--------------------------------------------------------------------------------------------
-// the setup routine runs once when you press reset:
-void setup() {                
-  // initialize the digital pin as an output.
+void setup() {
   pinMode(LedPin, OUTPUT);
-  digitalWrite(LedPin, HIGH); 
-  
+  digitalWrite(LedPin, HIGH);
+
   pinMode(SwitchLedPin, OUTPUT);
   digitalWrite(SwitchLedPin, LOW);
 
-  pinMode(ButtonSPin, INPUT);
-  digitalWrite(ButtonSPin, HIGH);  //Pull_Up
-  pinMode(ButtonTurnPin, INPUT);
-  digitalWrite(ButtonTurnPin, HIGH);  //Pull_Up
- 
-  XpressNet.start(XNetAddress, XNetSRPin);    //Initialisierung XNet-Bus
+  pinMode(ButtonSPin, INPUT_PULLUP);
+  pinMode(ButtonTurnPin, INPUT_PULLUP);
+
+  XpressNet.start(XNetAddress, XNetRxPin, XNetTxPin, XNetSRPin);    //inicjalizacja magistrali XpressNet
 }
 
 //--------------------------------------------------------------------------------------------
-// the loop routine runs over and over again forever:
 void loop() {
-  XpressNet.receive();  //permernet update the library
-  
-  CheckButton();  //check if Button push
+  XpressNet.receive();  //ciągła obsługa biblioteki
 
-  //Ask for switch state
+  CheckButton();  //sprawdź, czy przycisk został wciśnięty
+
+  //zapytaj o położenie zwrotnicy
   unsigned long currentMillis = millis();
-  if(currentMillis - previousMillis >= interval) {
-    // save the last time you blinked the LED 
-    previousMillis = currentMillis;  
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
     XpressNet.getTrntInfo(0, SwitchAdr);
   }
 }
 
 //--------------------------------------------------------------------------------------------
-void CheckButton() 
+void CheckButton()
 {
-  // read the state of the pushbutton value:
-  //Gerade
-  if (digitalRead(ButtonSPin) == LOW && lastButtonSState == HIGH) { //down
-    lastButtonSState = LOW;  //save state
+  //na wprost
+  if (digitalRead(ButtonSPin) == LOW && lastButtonSState == HIGH) { //wciśnięty
+    lastButtonSState = LOW;  //zapamiętaj stan
     digitalWrite(SwitchLedPin, HIGH);
-    
-    XpressNet.setTrntPos(0, SwitchAdr, B1000); //switch 18 gerade
-  }
-  if (digitalRead(ButtonSPin) == HIGH && lastButtonSState == LOW) { //up
-    lastButtonSState = HIGH; //save state
-  }
-  //Abzweigen
-  if (digitalRead(ButtonTurnPin) == LOW && lastButtonTurnState == HIGH) { //down
-    lastButtonTurnState = LOW;  //save state
-    digitalWrite(SwitchLedPin, LOW);
-    
-    XpressNet.setTrntPos(0, SwitchAdr, B0000); //switch 18 turn
-  }
-  if (digitalRead(ButtonTurnPin) == HIGH && lastButtonTurnState == LOW) { //up
-    lastButtonTurnState = HIGH; //save state
-  }
 
+    XpressNet.setTrntPos(0, SwitchAdr, B1000); //zwrotnica 18 na wprost (wyjście włączone, P = 0)
+  }
+  if (digitalRead(ButtonSPin) == HIGH && lastButtonSState == LOW) { //puszczony
+    lastButtonSState = HIGH; //zapamiętaj stan
+  }
+  //na bok
+  if (digitalRead(ButtonTurnPin) == LOW && lastButtonTurnState == HIGH) { //wciśnięty
+    lastButtonTurnState = LOW;  //zapamiętaj stan
+    digitalWrite(SwitchLedPin, LOW);
+
+    XpressNet.setTrntPos(0, SwitchAdr, B1001); //zwrotnica 18 na bok (wyjście włączone, P = 1)
+  }
+  if (digitalRead(ButtonTurnPin) == HIGH && lastButtonTurnState == LOW) { //puszczony
+    lastButtonTurnState = HIGH; //zapamiętaj stan
+  }
 }
 
 //--------------------------------------------------------------------------------------------
@@ -106,11 +90,10 @@ void notifyTrnt(uint8_t Adr_High, uint8_t Adr_Low, uint8_t Pos)
   if (Adr_Low == SwitchAdr) {
     if (Pos == B10)
       digitalWrite(SwitchLedPin, LOW);
-    if (Pos == B01)  
-      digitalWrite(SwitchLedPin, HIGH);  
+    if (Pos == B01)
+      digitalWrite(SwitchLedPin, HIGH);
   }
 }
-
 
 //--------------------------------------------------------------------------------------------
 void notifyXNetStatus (uint8_t State)
