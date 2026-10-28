@@ -14,25 +14,9 @@
 
 // include this library's description file
 #include "XpressNet.h"
-
-#if defined(__AVR__)
-#include <avr/interrupt.h>
-XpressNetClass *XpressNetClass::active_object = 0; // Static
-// On AVR the receive side runs in the USART interrupt: guard data shared with loop().
-#define XNET_LOCK()   \
-	uint8_t xnetSREG = SREG; \
-	cli()
-#define XNET_UNLOCK() SREG = xnetSREG
-#else
-// On ESP8266/ESP32 everything runs from receive() in loop(): nothing to guard.
-#define XNET_LOCK()
-#define XNET_UNLOCK()
-#endif
-
-#if defined(ESP8266) || defined(ESP32) // ESP8266 and ESP32 Support
 #include <SoftwareSerial.h>
-SoftwareSerial XNetSerial;
-#endif
+
+static SoftwareSerial XNetSerial;
 
 // Constructor /////////////////////////////////////////////////////////////////
 // Function that handles the creation and setup of instances
@@ -40,8 +24,8 @@ SoftwareSerial XNetSerial;
 XpressNetClass::XpressNetClass()
 {
 	// initialize this instance's variables
-	XNetclearSendBuf();
-	XNetclear();
+	memset(XNetSend, 0, sizeof(XNetSend));
+	memset(XNetMsg, 0, sizeof(XNetMsg));
 	memset(XNetMsgTemp, 0, sizeof(XNetMsgTemp));
 	XNetRun = false; // XNet ist inactive;
 	ReadData = false; // keine Serial Daten Speichern
@@ -55,11 +39,7 @@ XpressNetClass::XpressNetClass()
 }
 
 //******************************************Serial*******************************************
-#if defined(ESP8266) || defined(ESP32)
 void XpressNetClass::start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl) // Initialisierung Serial
-#else
-void XpressNetClass::start(byte XAdr, uint8_t XControl) // Initialisierung Serial
-#endif
 {
 	ledState = LOW;		 // Status LED, used to set the LED
 	lastByteMillis = millis();
@@ -77,8 +57,7 @@ void XpressNetClass::start(byte XAdr, uint8_t XControl) // Initialisierung Seria
 	myCallByteInquiry = callByteParity(MY_ADDRESS | 0x40) | 0x100;
 	myDirectedOps = callByteParity(MY_ADDRESS | 0x60) | 0x100;
 
-#if defined(ESP8266) || defined(ESP32)
-	XNetSerial.begin(62500, SWSERIAL_8S1, XNetSerial_RX_Port, XNetSerial_TX_Port, false, 95); // One Wire Half Duplex Serial, parity mode SPACE
+	XNetSerial.begin(62500, SWSERIAL_8S1, XNetSerial_RX_Port, XNetSerial_TX_Port, false, 95); // parity mode SPACE = 9th bit 0 on send
 	if (!XNetSerial)
 	{ // If the object did not initialize, then its configuration is invalid
 		Serial.println("Invalid SoftwareSerial pin configuration, check config");
@@ -89,39 +68,6 @@ void XpressNetClass::start(byte XAdr, uint8_t XControl) // Initialisierung Seria
 	}
 	// high speed half duplex, turn off interrupts during tx
 	XNetSerial.enableIntTx(false);
-#else
-	// Set up on 62500 Baud
-	cli(); // disable interrupts while initializing the USART
-#if defined(SERIAL_PORT)
-	UBRRH = 0;
-	UBRRL = 0x0F;
-	UCSRA = 0;
-	UCSRB = (1 << RXEN) | (1 << TXEN) | (1 << RXCIE) | (1 << UCSZ2);
-	UCSRC = (1 << UCSZ1) | (1 << UCSZ0);
-#elif defined(SERIAL_PORT_0)
-	UBRR0H = 0;
-	UBRR0L = 0x0F;
-	UCSR0A = 0;
-	UCSR0B = (1 << RXEN0) | (1 << TXEN0) | (1 << RXCIE0) | (1 << UCSZ02);
-	UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
-#elif defined(SERIAL_PORT_1)
-	UBRR1H = 0;
-	UBRR1L = 0x0F;
-	UCSR1A = 0;
-	UCSR1B = (1 << RXEN1) | (1 << TXEN1) | (1 << RXCIE1) | (1 << UCSZ12);
-	UCSR1C = (1 << UCSZ11) | (1 << UCSZ10);
-#endif
-	sei(); // Enable the Global Interrupt Enable flag so that interrupts can be processed
-	/*
-	 *  Enable reception (RXEN = 1).
-	 *  Enable transmission (TXEN0 = 1).
-	 *	Enable Receive Interrupt (RXCIE = 1).
-	 *  Set 8-bit character mode (UCSZ00, UCSZ01, and UCSZ02 together control this,
-	 *  But UCSZ00, UCSZ01 are in Register UCSR0C).
-	 */
-
-	active_object = this; // hold Object to call it back in ISR
-#endif
 }
 
 // Public Methods //////////////////////////////////////////////////////////////
@@ -131,7 +77,6 @@ void XpressNetClass::start(byte XAdr, uint8_t XControl) // Initialisierung Seria
 // Daten ermitteln und Auswerten - call as often as possible from loop()
 void XpressNetClass::receive(void)
 {
-#if defined(ESP8266) || defined(ESP32)
 	// Read everything that is waiting, not just one byte: the call byte for this
 	// device must be answered right away, not after older bytes in the buffer.
 	while (true)
@@ -143,7 +88,7 @@ void XpressNetClass::receive(void)
 		}
 		unsigned int rxdata = XNetSerial.read();
 		if (XNetSerial.readParity())
-		{ // detect parity bit set on the last message (MARK parity) = Call Byte
+		{ // 9th bit set (MARK parity) = Call Byte
 			rxdata |= 0x100;
 		}
 		// The byte completed some time after the buffer was last seen empty.
@@ -158,35 +103,12 @@ void XpressNetClass::receive(void)
 			XNethandleMessage(XNetMsg);
 		}
 	}
-#else
-	if (DataReady)
-	{ // copy the message, the interrupt may already receive the next one
-		uint8_t msg[XNetMsgSize];
-		{
-			XNET_LOCK();
-			memcpy(msg, XNetMsg, XNetMsgSize);
-			DataReady = false;
-			XNET_UNLOCK();
-		}
-		XNethandleMessage(msg);
-	}
-#endif
 
 	// no data on the bus: blink the status LED
-	unsigned long lastByte;
-	{
-		XNET_LOCK();
-		lastByte = lastByteMillis;
-		XNET_UNLOCK();
-	}
-	if ((unsigned long)(millis() - lastByte) > XNetTimeoutMs)
+	if ((unsigned long)(millis() - lastByteMillis) > XNetTimeoutMs)
 	{
 		XNetRun = false; // Keine Zentrale vorhanden
-		{
-			XNET_LOCK();
-			lastByteMillis = millis();
-			XNET_UNLOCK();
-		}
+		lastByteMillis = millis();
 		ledState = !ledState;
 		if (notifyXNetStatus)
 			notifyXNetStatus(ledState);
@@ -321,13 +243,10 @@ bool XpressNetClass::setTrntPos(byte FAdr_High, byte FAdr_Low, byte Pos)
 
 	Adr = Adr >> 2;
 	bitWrite(AdrL, 7, 1);
-	unsigned char setTrnt[] = {0x52, 0x00, AdrL, 0x00}; // old: 0x52, Adr, AdrL, 0x00
-	// setTrnt[1] =  (Adr >> 2) & 0xFF;
-	// change by André Schenk:
-	setTrnt[1] = Adr;
+	unsigned char setTrnt[] = {0x52, 0x00, AdrL, 0x00};
+	setTrnt[1] = Adr; // change by André Schenk
 	getXOR(setTrnt, 4);
 
-	// getTrntInfo(FAdr_High, FAdr_Low);  //Schaltstellung abfragen
 	if (notifyTrnt)
 		notifyTrnt(FAdr_High, FAdr_Low, (Pos & B1) + 1);
 
@@ -370,160 +289,6 @@ byte XpressNetClass::callByteParity(byte me)
 }
 
 //--------------------------------------------------------------------------------------------
-int XpressNetClass::USART_Receive(void)
-{
-#if defined(ESP8266) || defined(ESP32)
-	if (XNetSerial.available())
-	{ // If anything comes in Serial
-		uint16_t data = XNetSerial.read();
-		if (XNetSerial.readParity())
-		{ // detect parity bit set on the last message (MARK parity)
-			data = data | 0x100;
-		}
-		return data;
-	}
-	else
-		return -1;
-#else
-	unsigned char status, resh, resl;
-// Wait for data to be received
-#if defined(SERIAL_PORT)
-	status = UCSRA;
-	while (!(status & (1 << RXC)))
-	{
-		return -1;
-	} // status = UCSRA;}
-
-	// Get status and 9th bit, then data
-	resh = UCSRB;
-	resl = UDR;
-
-	// If error, return -1
-	if (status & ((1 << FE) | (1 << DOR) | (1 << PE)))
-	{
-		return -1;
-	}
-
-#elif defined(SERIAL_PORT_0)
-	status = UCSR0A;
-	while (!(status & (1 << RXC0)))
-	{
-		return -1;
-	} // status = UCSR0A;}
-
-	// Get status and 9th bit, then data
-	resh = UCSR0B;
-	resl = UDR0;
-
-	// If error, return -1
-	if (status & ((1 << FE0) | (1 << DOR0) | (1 << UPE0)))
-	{
-		return -1;
-	}
-
-#elif defined(SERIAL_PORT_1)
-	status = UCSR1A;
-	while (!(status & (1 << RXC1)))
-	{
-		return -1;
-	} // status = UCSR1A;}
-
-	// Get status and 9th bit, then data
-	resh = UCSR1B;
-	resl = UDR1;
-
-	// If error, return -1
-	if (status & ((1 << FE1) | (1 << DOR1) | (1 << UPE1)))
-	{
-		return -1;
-	}
-#endif
-
-	// Filter the 9th bit, then return
-	resh = (resh >> 1) & 0x01;
-	return ((resh << 8) | resl);
-#endif
-}
-
-//--------------------------------------------------------------------------------------------
-void XpressNetClass::USART_Transmit(unsigned char data8)
-{
-#if defined(ESP8266) || defined(ESP32)
-	XNetSerial.write(data8); // we didn't want to MARK = SWSERIAL_PARITY_MARK
-#else
-// wait for empty transmit buffer
-#if defined(SERIAL_PORT)
-	while (!(UCSRA & (1 << UDRE)))
-	{
-	}
-	// put the data into buffer, and send
-	UDR = data8;
-#elif defined(SERIAL_PORT_0)
-	while (!(UCSR0A & (1 << UDRE0)))
-	{
-	}
-	// put the data into buffer, and send
-	UDR0 = data8;
-#elif defined(SERIAL_PORT_1)
-	while (!(UCSR1A & (1 << UDRE1)))
-	{
-	}
-	// put the data into buffer, and send
-	UDR1 = data8;
-#endif
-#endif
-}
-
-//--------------------------------------------------------------------------------------------
-// Löschen der letzten empfangenen Nachricht
-void XpressNetClass::XNetclear()
-{
-	memset(XNetMsg, 0, sizeof(XNetMsg));
-}
-
-#if defined(__AVR__)
-//--------------------------------------------------------------------------------------------
-// Interrupt routine for reading via Serial
-#if defined(SERIAL_PORT)
-ISR(USART_RX_vect)
-{
-	XpressNetClass::handle_interrupt(); // weiterreichen an die Funktion
-}
-
-#elif defined(SERIAL_PORT_0)
-ISR(USART_RX_vect)
-{
-	XpressNetClass::handle_interrupt(); // weiterreichen an die Funktion
-}
-
-#elif defined(SERIAL_PORT_1)
-ISR(USART1_RX_vect)
-{
-	XpressNetClass::handle_interrupt(); // weiterreichen an die Funktion
-}
-#endif
-
-// Interrupt handling
-/* static */
-inline void XpressNetClass::handle_interrupt()
-{
-	if (active_object)
-	{
-		active_object->XNetget(); // Daten Einlesen und Speichern
-	}
-}
-#endif
-
-//--------------------------------------------------------------------------------------------
-// Serial einlesen (AVR: called from the receive interrupt, always in time)
-void XpressNetClass::XNetget()
-{
-	int rxdata = USART_Receive();
-	if (rxdata != -1)
-		XNetprocessByte((unsigned int)rxdata, true);
-}
-
-//--------------------------------------------------------------------------------------------
 // Ein empfangenes Byte auswerten.
 // inTime = false: the call byte was read too late to answer it without a collision.
 void XpressNetClass::XNetprocessByte(unsigned int rxdata, bool inTime)
@@ -554,10 +319,8 @@ void XpressNetClass::XNetprocessByte(unsigned int rxdata, bool inTime)
 			XNetsend(inTime);
 			return; // Daten wurden verarbeitet
 		}
-		else /*if (rxdata == GENERAL_BROADCAST || rxdata == myDirectedOps) */
-		{	 // Datenempfang aktivieren
-			ReadData = true;
-		}
+		// GENERAL_BROADCAST, directed message or another device: Datenempfang aktivieren
+		ReadData = true;
 	}
 	if (ReadData == true)
 	{
@@ -602,30 +365,20 @@ void XpressNetClass::XNetmessageComplete(void)
 }
 
 //--------------------------------------------------------------------------------------------
-void XpressNetClass::XNetclearSendBuf() // Buffer leeren
-{
-	memset(XNetSend, 0, sizeof(XNetSend));
-}
-
-//--------------------------------------------------------------------------------------------
 boolean XpressNetClass::XNetSendadd(unsigned char *dataString, byte byteCount)
 {
 	if (byteCount == 0 || byteCount > XSendMaxData)
 		return false;
-	boolean added = false;
-	XNET_LOCK();
 	for (byte i = 0; i < XSendMax; i++)
 	{
 		if (XNetSend[i].length == 0)
 		{									// Daten hier Eintragen:
 			memcpy(XNetSend[i].data, dataString, byteCount);
 			XNetSend[i].length = byteCount; // Datenlaenge
-			added = true; // leeren Platz gefunden -> ENDE
-			break;
+			return true; // leeren Platz gefunden -> ENDE
 		}
 	}
-	XNET_UNLOCK();
-	return added; // false = Kein Platz im Sendbuffer frei!
+	return false; // Kein Platz im Sendbuffer frei!
 }
 
 //--------------------------------------------------------------------------------------------
@@ -681,25 +434,10 @@ void XpressNetClass::XNetsend(bool inTime)
 void XpressNetClass::XNetsend(unsigned char *dataString, byte byteCount)
 {
 	digitalWrite(MAX485_CONTROL, HIGH);
-#if defined(ESP8266) || defined(ESP32)
 	XNetSerial.enableTx(true);
 	// one call for all bytes: no gaps between them; returns after the last stop bit
 	XNetSerial.write(dataString, byteCount);
-#else
-	for (byte i = 0; i < byteCount; i++)
-	{
-		USART_Transmit(*dataString);
-		dataString++;
-	}
-#endif
-
-#if defined(__AVR__)
-	WAIT_FOR_XMIT_COMPLETE;
-#else
 	delayMicroseconds(10);
-#endif
 	digitalWrite(MAX485_CONTROL, LOW);
-#if defined(ESP8266) || defined(ESP32)
 	XNetSerial.enableTx(false);
-#endif
 }

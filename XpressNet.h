@@ -3,7 +3,7 @@
   Copyright (c) 2013-2024 Philipp Gahtow  All right reserved.
   for Private use only!
 
-  Version 2.8.0 (28.10.2026)
+  Version 3.0.0 (28.10.2026)
 
   Notice:
   Works until now, only with XPressNet Version 3.0 or higher!
@@ -15,7 +15,7 @@
   02.02.2017 Philipp Gahtow - add accessory change 0x52 (by Norberto Redondo Melchor)
 							- fix in setTrntPos Adr convert
 							- fix narrow conversations in arrays
-  28.04.2017 Philipp Gahtow - optimize ram usage in callByteParity							
+  28.04.2017 Philipp Gahtow - optimize ram usage in callByteParity
   23.07.2017 Philipp Gahtow - add changes for WLANMaus made by André Schenk
   20.10.2017 Philipp Gahtow - add BC for "Schaltinformation"
   18.04.2020 Philipp Gahtow - fix long Address from 100 on!
@@ -32,70 +32,30 @@
 							  broadcast 0x4X routed by type (turnout -> notifyTrnt, feedback ->
 							  notifyFeedback), 0x52 activate bit read according to the spec,
 							  bus timeout measured in milliseconds
+  28.10.2026 Damian Celmer  - ESP32 only: AVR and ESP8266 support removed
 */
 
 // ensure this library description is only included once
 #ifndef XpressNet_h
 #define XpressNet_h
 
-// include types & constants of Wiring core API
-#if defined(WIRING)
- #include <Wiring.h>
-#elif ARDUINO >= 100
- #include <Arduino.h>
-#else
- #include <WProgram.h>
+#if !defined(ESP32)
+#error "This XpressNet library supports only ESP32."
 #endif
 
-/* From the ATMega datasheet: */
-//--------------------------------------------------------------------------------------------
-// Which serial port is used, if we have more than one on the chip?
-// note that the 328s (the currently produced "smaller" chips) only
-// have one serial port, so we force this.
-//Maybe we are running on a MEGA chip with more than 1 port? If so, you
-//can put the serial port to port 1, and use the port 0 for status messages
-//to your PC.
-#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(__AVR_ATmega32U4__) //Arduino MEGA, Leonardo
-#define SERIAL_PORT_1
-#undef SERIAL_PORT_0
-
-#elif defined(__AVR_ATmega1284P__) || defined(__AVR_ATmega644P__)  //Sanguino (other pins!)
-#define SERIAL_PORT_1
-#undef SERIAL_PORT_0
-
-#elif defined(ESP8266) || defined(ESP32)		//ESP8266 and ESP32 Support
-#define XNetSerial_Default	D7
-
-#else //others Arduino UNO
-#define SERIAL_PORT_0
-#undef SERIAL_PORT_1
-#endif
-
-// when sending data, do NOT continue until the hardware has sent the data out
-
-#if defined(SERIAL_PORT)
-#define WAIT_FOR_XMIT_COMPLETE {while (!(UCSRA & (1<<TXC))); UCSRA = (1<<TXC); UCSRA = 0;}
-#elif defined(SERIAL_PORT_0)
-#define WAIT_FOR_XMIT_COMPLETE {while (!(UCSR0A & (1<<TXC0))); UCSR0A = (1<<TXC0); UCSR0A = 0;}
-#elif defined(SERIAL_PORT_1)
-#define WAIT_FOR_XMIT_COMPLETE {while (!(UCSR1A & (1<<TXC1))); UCSR1A = (1<<TXC1); UCSR1A = 0;}
-#endif
+#include <Arduino.h>
 
 //--------------------------------------------------------------------------------------------
 
-// XPressnet Call Bytes.
-// broadcast to everyone, we save the incoming data and process it later.
+// Call byte of a general broadcast (9th bit set)
 #define GENERAL_BROADCAST 0x160
 
-//XpressNet Befehl, jedes gesendete Byte
+// Index of the fields in a received message
 #define XNetlength	0		//Länge
-#define XNetmsg		1		//Message
-#define XNetcom		2		//Kennung/Befehl
+#define XNetmsg		1		//Call Byte
+#define XNetcom		2		//Header (Kennung/Befehl)
 #define XNetdata1	3		//Databyte1
 #define XNetdata2	4		//Databyte2
-#define XNetdata3	5		//Databyte3
-#define XNetdata4	6		//Databyte4
-#define XNetdata5	7		//Databyte5
 
 // Receive buffer: [0] = length, then call byte, header, up to 15 data bytes and the XOR byte.
 #define XNetMsgSize 19
@@ -109,10 +69,10 @@
 #define XSendMaxRetry 5
 #endif
 
-// Software Serial only: the call byte for this device is answered only if it was
-// read at most this many microseconds after the receive buffer was last seen empty.
-// A later answer would collide with the next call byte of the command station,
-// so the poll is skipped instead and the command waits for the next one.
+// The call byte for this device is answered only if it was read at most this many
+// microseconds after the receive buffer was last seen empty. A later answer would
+// collide with the next call byte of the command station, so the poll is skipped
+// instead and the command waits for the next one.
 #ifndef XNetMaxResponseDelayUs
 #define XNetMaxResponseDelayUs 60
 #endif
@@ -135,18 +95,11 @@ class XpressNetClass
   // user-accessible "public" interface
   public:
     XpressNetClass(void);	//Constuctor
-	#if defined(ESP8266) || defined(ESP32)
 	void start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl);  //Initialisierung Serial
-	#else
-	void start(byte XAdr, uint8_t XControl);  //Initialisierung Serial
-	#endif
 	void receive(void);				//Prüfe ob XNet Packet vorhanden und werte es aus.
 
 	bool getTrntInfo (byte FAdr_High, byte FAdr_Low);		//Ermitteln der Schaltstellung einer Weiche
 	bool setTrntPos (byte FAdr_High, byte FAdr_Low, byte Pos);		//Schalten einer Weiche
-
-	// public only for easy access by interrupt handlers
-	static inline void handle_interrupt();		//Serial Interrupt bearbeiten
 
   // library-accessible "private" interface
   private:
@@ -158,14 +111,9 @@ class XpressNetClass
 	unsigned int myCallByteInquiry;	// the address we look for for our Call Byte Window
 	unsigned int myRequestAck;		// the address for a request acknowlegement sent
 	uint8_t XNetMsg[XNetMsgSize];		//Daten wurden empfangen (geprüfte Nachricht)
-	volatile bool DataReady;			//Daten können verarbeitet werden
+	bool DataReady;				//Daten können verarbeitet werden
 	uint8_t XNetMsgTemp[XNetMsgSize];	//Serial receive (Length, Message, Command, Data1 ...)
 	bool ReadData;				//Empfangene Serial Daten: (Speichern = true/Komplett = false)
-	static XpressNetClass *active_object;	//aktuelle aktive Object
-	void XNetget(void);			//Empfangene Daten eintragen (AVR: aus dem Interrupt)
-	void XNetprocessByte(unsigned int rxdata, bool inTime);	//ein empfangenes Byte auswerten
-	void XNetmessageComplete(void);	//Nachricht prüfen (Länge/XOR) und übergeben
-	void XNethandleMessage(const uint8_t *msg);	//geprüfte Nachricht auswerten
 	XSend XNetSend[XSendMax];		//Sendbuffer
 
 	// state of the command at the head of the send buffer
@@ -173,25 +121,23 @@ class XpressNetClass
 	bool XNetSendFailed;		//Zentrale meldet Fehler/Busy -> erneut senden
 	uint8_t XNetSendRetries;	//Anzahl Wiederholungen des aktuellen Befehls
 
+	//Status LED:
+	int ledState;             // ledState used to set the LED
+	unsigned long lastByteMillis;	// time of the last received byte / LED toggle
+	unsigned long lastIdleMicros;	// last time the receive buffer was seen empty
+
 		//Functions:
+	void XNetprocessByte(unsigned int rxdata, bool inTime);	//ein empfangenes Byte auswerten
+	void XNetmessageComplete(void);	//Nachricht prüfen (Länge/XOR) und übergeben
+	void XNethandleMessage(const uint8_t *msg);	//geprüfte Nachricht auswerten
+	void reportAccessory(byte data1, byte data2);  //Aufbereiten der Schalt-/Rückmeldeinformation
 	void getXOR (unsigned char *data, byte length); // calculate the XOR
 	byte callByteParity (byte me);	// calculate the parity bit
-	int USART_Receive( void );	//Serial Empfangen
-	void USART_Transmit (unsigned char data8); //Serial Senden
-	void XNetclear(void);		//Serial Nachricht zurücksetzten
 
-	void reportAccessory(byte data1, byte data2);  //Aufbereiten der Schalt-/Rückmeldeinformation
-
-	void XNetclearSendBuf();	//Sendbuffer leeren
 	boolean XNetSendadd(unsigned char *dataString, byte byteCount);	//Zum Sendebuffer Hinzufügen
 	void XNetSendremoveFirst(void);	//ersten Eintrag aus dem Sendebuffer entfernen
 	void XNetsend(bool inTime); //Antwort auf Call Byte: Send Saved Data aus Sendebuffer
 	void XNetsend(unsigned char *dataString, byte byteCount);	//Sende Daten aus Array
-
-	//Status LED:
-	int ledState;             // ledState used to set the LED
-	volatile unsigned long lastByteMillis;	// time of the last received byte / LED toggle
-	unsigned long lastIdleMicros;	// last time the receive buffer was seen empty (Software Serial)
 };
 
 #if defined (__cplusplus)
@@ -208,4 +154,3 @@ class XpressNetClass
 
 
 #endif
-

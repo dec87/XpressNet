@@ -1,8 +1,8 @@
 # XpressNet
-Arduino XpressNet Slave Library
+XpressNet client (slave) library for ESP32.
 
-Works with AVR Arduino UNO/NANO on Hardware Serial and on Arduino MEGA on Serial1.
-Support ESP8266 and ESP32 with Software Serial.
+Uses EspSoftwareSerial (9-bit frames at 62500 baud) and an RS485 transceiver
+(e.g. MAX485) with a send/receive control pin. Other platforms are not supported.
 
 ## Scope
 
@@ -16,9 +16,7 @@ control, CV programming and track power control are **not** supported.
 ```cpp
 XpressNetClass XpressNet;
 
-// Arduino UNO/MEGA (Hardware Serial):
-XpressNet.start(byte XAdr, uint8_t XControl);
-// ESP8266/ESP32 (Software Serial):
+// RX pin (RS485 RO), TX pin (RS485 DI), send/receive pin (RS485 DE/RE):
 XpressNet.start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl);
 
 XpressNet.receive();                                       // call this in loop()
@@ -42,10 +40,10 @@ deactivate command (0x52 with C = 0), `Pos` has bit 3 set (`Pos | B1000`).
 ## Reliable transfer
 
 - Call `receive()` as often as possible. It reads all waiting bytes at once.
-- On ESP8266/ESP32 (Software Serial) the call byte of this device is answered only
-  while the answer window of the command station is still open. When `loop()` was
-  busy and the call byte is read too late, that poll is skipped (an answer would
-  collide with the next call byte) and the command is sent at the next poll.
+- The call byte of this device is answered only while the answer window of the
+  command station is still open. When `loop()` was busy and the call byte is read
+  too late, that poll is skipped (an answer would collide with the next call byte)
+  and the command is sent at the next poll.
 - A sent command stays in the send buffer until the command station accepts it.
   After "transfer error" (0x61 0x80), "command station busy" (0x61 0x81) or a
   request acknowledgement it is sent again, up to `XSendMaxRetry` times.
@@ -57,7 +55,7 @@ Tuning (define before including the library, e.g. in `build_flags`):
 | Define | Default | Meaning |
 |---|---|---|
 | `XSendMaxRetry` | 5 | resends of one command before it is dropped |
-| `XNetMaxResponseDelayUs` | 60 | max. delay (µs) for answering our call byte (Software Serial) |
+| `XNetMaxResponseDelayUs` | 60 | max. delay (µs) for answering our call byte |
 | `XNetTimeoutMs` | 1000 | no bus data for this long = no command station, status LED blinks |
 
 ## Examples
@@ -65,7 +63,6 @@ Tuning (define before including the library, e.g. in `build_flags`):
 - `Xpressnet_Lib` - minimal setup showing start/receive and the notify callbacks
 - `Xpressnet_Lib_Weiche` - switch a turnout with two buttons and poll its position
 - `Xpressnet_Lib_StopButton` - toggle a turnout with a single push-button
-- `XpressNet_Lib_Lok_Speicher` - remember the last commanded turnout positions in EEPROM and restore them after a reset
 - `XpressNet_Sniffer` - log turnout/feedback traffic seen on the bus
 
 See the `examples` folder to find out how to use the library.
