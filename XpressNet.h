@@ -1,143 +1,143 @@
 /*
-  XpressNet.h - library for XpressNet protocoll
-  Copyright (c) 2013-2024 Philipp Gahtow  All right reserved.
-  for Private use only!
+  XpressNet.h - biblioteka protokołu XpressNet
+  Copyright (c) 2013-2024 Philipp Gahtow. Wszelkie prawa zastrzeżone.
+  Tylko do użytku prywatnego!
 
-  Version 3.0.0 (28.10.2026)
+  Wersja 3.0.0 (28.10.2026)
 
-  Notice:
-  Works until now, only with XPressNet Version 3.0 or higher!
+  Uwaga:
+  Działa tylko z XpressNet w wersji 3.0 lub nowszej!
   *********************************************************************
-  21.07.2015 Philipp Gahtow - change adressing of switch commands
-							- optimize memory use of setPower Function
-  29.09.2015 Philipp Gahtow - fix F13 to F20 command for Multimaus
-  17.11.2015 Philipp Gahtow - fix in setTrntPos for AdrL
-  02.02.2017 Philipp Gahtow - add accessory change 0x52 (by Norberto Redondo Melchor)
-							- fix in setTrntPos Adr convert
-							- fix narrow conversations in arrays
-  28.04.2017 Philipp Gahtow - optimize ram usage in callByteParity
-  23.07.2017 Philipp Gahtow - add changes for WLANMaus made by André Schenk
-  20.10.2017 Philipp Gahtow - add BC for "Schaltinformation"
-  18.04.2020 Philipp Gahtow - fix long Address from 100 on!
-  26.08.2021 Philipp Gahtow - add E4 commands and detect all messages with seperate stack
-  19.11.2021 Philipp Gahtow - add new function to set LokFunc in packets; fix E4 commands return fault loco adr and func;
-  31.01.2022 Philipp Gahtow - add Support with use of Software Serial for ESP8266 and ESP32 (https://github.com/plerup/espsoftwareserial)
-  27.01.2024 Philipp Gahtow - add Support Leonardo
-  28.10.2026 Damian Celmer  - reliable transfer: drain the whole RX buffer each receive() call,
-							  answer the call byte only while the poll window is still open,
-							  keep a sent command until the command station accepts it and
-							  resend it after "transfer error"/"busy" or a request acknowledgement,
-							  bounded RX buffer (fixes overwriting the send queue), XOR/length check
-							  of received messages, no duplicate delivery of the previous message,
-							  broadcast 0x4X routed by type (turnout -> notifyTrnt, feedback ->
-							  notifyFeedback), 0x52 activate bit read according to the spec,
-							  bus timeout measured in milliseconds
-  28.10.2026 Damian Celmer  - ESP32 only: AVR and ESP8266 support removed
+  21.07.2015 Philipp Gahtow - zmiana adresowania komend zwrotnic
+							- mniejsze zużycie pamięci w funkcji setPower
+  29.09.2015 Philipp Gahtow - poprawka komend F13-F20 dla Multimaus
+  17.11.2015 Philipp Gahtow - poprawka AdrL w setTrntPos
+  02.02.2017 Philipp Gahtow - obsługa zmiany akcesoriów 0x52 (autor: Norberto Redondo Melchor)
+							- poprawka konwersji adresu w setTrntPos
+							- poprawka zawężających konwersji w tablicach
+  28.04.2017 Philipp Gahtow - mniejsze zużycie RAM w callByteParity
+  23.07.2017 Philipp Gahtow - zmiany dla WLANMaus (autor: André Schenk)
+  20.10.2017 Philipp Gahtow - rozgłoszenie informacji o stanie zwrotnic ("Schaltinformation")
+  18.04.2020 Philipp Gahtow - poprawka długich adresów od 100 w górę
+  26.08.2021 Philipp Gahtow - komendy E4 i odbiór wszystkich komunikatów w osobnym buforze
+  19.11.2021 Philipp Gahtow - funkcje lokomotywy w pakietach; poprawka adresu i funkcji w odpowiedziach E4
+  31.01.2022 Philipp Gahtow - obsługa ESP8266 i ESP32 przez Software Serial (https://github.com/plerup/espsoftwareserial)
+  27.01.2024 Philipp Gahtow - obsługa Leonardo
+  28.10.2026 Damian Celmer  - niezawodna transmisja: receive() odczytuje cały bufor odbiorczy,
+							  odpowiedź na call byte tylko w otwartym oknie odpytania,
+							  wysłana komenda zostaje w kolejce do przyjęcia przez centralkę
+							  i jest powtarzana po "błąd transmisji"/"zajęta" lub prośbie o potwierdzenie,
+							  bufor odbiorczy z kontrolą zakresu (nie nadpisuje już kolejki wysyłania),
+							  kontrola długości i XOR odebranych komunikatów, brak ponownego
+							  przekazania poprzedniego komunikatu, rozgłoszenia 0x4X kierowane wg typu
+							  (zwrotnica -> notifyTrnt, czujnik -> notifyFeedback), bit aktywacji
+							  w 0x52 czytany zgodnie ze specyfikacją, limit czasu magistrali w ms
+  28.10.2026 Damian Celmer  - tylko ESP32: usunięta obsługa AVR i ESP8266
 */
 
-// ensure this library description is only included once
+// zabezpieczenie przed wielokrotnym dołączeniem
 #ifndef XpressNet_h
 #define XpressNet_h
 
 #if !defined(ESP32)
-#error "This XpressNet library supports only ESP32."
+#error "Ta biblioteka XpressNet obsługuje tylko ESP32."
 #endif
 
 #include <Arduino.h>
 
 //--------------------------------------------------------------------------------------------
 
-// Call byte of a general broadcast (9th bit set)
+// Call byte rozgłoszenia ogólnego (ustawiony 9. bit)
 #define GENERAL_BROADCAST 0x160
 
-// Index of the fields in a received message
-#define XNetlength	0		//Länge
-#define XNetmsg		1		//Call Byte
-#define XNetcom		2		//Header (Kennung/Befehl)
-#define XNetdata1	3		//Databyte1
-#define XNetdata2	4		//Databyte2
+// Indeksy pól w odebranym komunikacie
+#define XNetlength	0		//długość
+#define XNetmsg		1		//call byte
+#define XNetcom		2		//nagłówek (rodzaj komendy)
+#define XNetdata1	3		//bajt danych 1
+#define XNetdata2	4		//bajt danych 2
 
-// Receive buffer: [0] = length, then call byte, header, up to 15 data bytes and the XOR byte.
+// Bufor odbiorczy: [0] = długość, potem call byte, nagłówek, do 15 bajtów danych i bajt XOR.
 #define XNetMsgSize 19
 
-#define XSendMax 16			//Maximalanzahl der Datenpakete im Sendebuffer
-#define XSendMaxData 8		//Anzahl Elemente im Datapaket Array XSend
+#define XSendMax 16			//maksymalna liczba komend w kolejce wysyłania
+#define XSendMaxData 8		//maksymalna liczba bajtów jednej komendy
 
-// How often a command is resent after "transfer error"/"command station busy"
-// or a request acknowledgement before it is dropped.
+// Ile razy komenda jest powtarzana po "błąd transmisji"/"centralka zajęta"
+// lub prośbie o potwierdzenie, zanim zostanie odrzucona.
 #ifndef XSendMaxRetry
 #define XSendMaxRetry 5
 #endif
 
-// The call byte for this device is answered only if it was read at most this many
-// microseconds after the receive buffer was last seen empty. A later answer would
-// collide with the next call byte of the command station, so the poll is skipped
-// instead and the command waits for the next one.
+// Odpowiedź na call byte tego urządzenia jest wysyłana tylko wtedy, gdy został on
+// odczytany najpóźniej po tylu mikrosekundach od chwili, gdy bufor odbiorczy był
+// ostatnio pusty. Późniejsza odpowiedź zderzyłaby się z kolejnym call bytem centralki,
+// więc odpytanie jest pomijane, a komenda czeka na następne.
 #ifndef XNetMaxResponseDelayUs
 #define XNetMaxResponseDelayUs 60
 #endif
 
-// No byte on the bus for this long = no command station (status LED blinks).
+// Brak bajtów na magistrali przez tyle ms = brak centralki (dioda stanu miga).
 #ifndef XNetTimeoutMs
 #define XNetTimeoutMs 1000
 #endif
 
-typedef struct	//Antwort/Abfragespeicher
+typedef struct	//komenda w kolejce wysyłania
 {
-	uint8_t length;			//Speicher für Datenlänge
-	byte data[XSendMaxData];	//zu sendende Daten
+	uint8_t length;			//długość danych
+	byte data[XSendMaxData];	//dane do wysłania
 } XSend;
 
-// library interface description
-// Diese Variante unterstützt nur das Schalten von Weichen/Zubehör und das Auslesen ihrer Rückmeldeposition.
+// Interfejs biblioteki
+// Ta wersja obsługuje tylko przełączanie zwrotnic/akcesoriów i odczyt ich położenia.
 class XpressNetClass
 {
-  // user-accessible "public" interface
+  // interfejs publiczny
   public:
-    XpressNetClass(void);	//Constuctor
-	void start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl);  //Initialisierung Serial
-	void receive(void);				//Prüfe ob XNet Packet vorhanden und werte es aus.
+    XpressNetClass(void);	//konstruktor
+	void start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl);  //inicjalizacja portu
+	void receive(void);				//odbiór i obsługa komunikatów XpressNet - wywoływać w loop()
 
-	bool getTrntInfo (byte FAdr_High, byte FAdr_Low);		//Ermitteln der Schaltstellung einer Weiche
-	bool setTrntPos (byte FAdr_High, byte FAdr_Low, byte Pos);		//Schalten einer Weiche
+	bool getTrntInfo (byte FAdr_High, byte FAdr_Low);		//zapytanie o położenie zwrotnicy
+	bool setTrntPos (byte FAdr_High, byte FAdr_Low, byte Pos);		//przełączenie zwrotnicy
 
-  // library-accessible "private" interface
+  // interfejs prywatny
   private:
-	  //Variables:
-	boolean XNetRun;	//XpressNet ist aktiv
-	byte MY_ADDRESS;	//XpressNet address: must be in range of 1-31; must be unique.
-	byte MAX485_CONTROL; //Port for send or receive control
-	unsigned int myDirectedOps;		// the address we look for when we are listening for ops
-	unsigned int myCallByteInquiry;	// the address we look for for our Call Byte Window
-	unsigned int myRequestAck;		// the address for a request acknowlegement sent
-	uint8_t XNetMsg[XNetMsgSize];		//Daten wurden empfangen (geprüfte Nachricht)
-	bool DataReady;				//Daten können verarbeitet werden
-	uint8_t XNetMsgTemp[XNetMsgSize];	//Serial receive (Length, Message, Command, Data1 ...)
-	bool ReadData;				//Empfangene Serial Daten: (Speichern = true/Komplett = false)
-	XSend XNetSend[XSendMax];		//Sendbuffer
+	  //zmienne:
+	boolean XNetRun;	//XpressNet aktywny (centralka odpowiedziała na zapytanie o status)
+	byte MY_ADDRESS;	//adres XpressNet: 1-31, musi być unikalny
+	byte MAX485_CONTROL; //pin przełączania nadawanie/odbiór RS485
+	unsigned int myDirectedOps;		// call byte komunikatów skierowanych do nas
+	unsigned int myCallByteInquiry;	// call byte odpytania nas (okno na odpowiedź)
+	unsigned int myRequestAck;		// call byte prośby o potwierdzenie
+	uint8_t XNetMsg[XNetMsgSize];		//odebrany i sprawdzony komunikat
+	bool DataReady;				//komunikat gotowy do obsługi
+	uint8_t XNetMsgTemp[XNetMsgSize];	//odbierany komunikat (długość, call byte, nagłówek, dane ...)
+	bool ReadData;				//zapisywanie odbieranych bajtów włączone
+	XSend XNetSend[XSendMax];		//kolejka wysyłania
 
-	// state of the command at the head of the send buffer
-	bool XNetSendPending;		//Befehl gesendet, Ergebnis noch offen
-	bool XNetSendFailed;		//Zentrale meldet Fehler/Busy -> erneut senden
-	uint8_t XNetSendRetries;	//Anzahl Wiederholungen des aktuellen Befehls
+	// stan komendy na początku kolejki wysyłania
+	bool XNetSendPending;		//komenda wysłana, wynik jeszcze nieznany
+	bool XNetSendFailed;		//centralka zgłosiła błąd/zajętość -> wyślij ponownie
+	uint8_t XNetSendRetries;	//liczba powtórzeń bieżącej komendy
 
-	//Status LED:
-	int ledState;             // ledState used to set the LED
-	unsigned long lastByteMillis;	// time of the last received byte / LED toggle
-	unsigned long lastIdleMicros;	// last time the receive buffer was seen empty
+	//dioda stanu:
+	int ledState;             // stan diody
+	unsigned long lastByteMillis;	// czas ostatniego odebranego bajtu / przełączenia diody
+	unsigned long lastIdleMicros;	// ostatnia chwila, gdy bufor odbiorczy był pusty
 
-		//Functions:
-	void XNetprocessByte(unsigned int rxdata, bool inTime);	//ein empfangenes Byte auswerten
-	void XNetmessageComplete(void);	//Nachricht prüfen (Länge/XOR) und übergeben
-	void XNethandleMessage(const uint8_t *msg);	//geprüfte Nachricht auswerten
-	void reportAccessory(byte data1, byte data2);  //Aufbereiten der Schalt-/Rückmeldeinformation
-	void getXOR (unsigned char *data, byte length); // calculate the XOR
-	byte callByteParity (byte me);	// calculate the parity bit
+		//funkcje:
+	void XNetprocessByte(unsigned int rxdata, bool inTime);	//obsługa jednego odebranego bajtu
+	void XNetmessageComplete(void);	//sprawdzenie komunikatu (długość/XOR) i przekazanie go dalej
+	void XNethandleMessage(const uint8_t *msg);	//obsługa sprawdzonego komunikatu
+	void reportAccessory(byte data1, byte data2);  //przekazanie informacji o zwrotnicach/czujnikach
+	void getXOR (unsigned char *data, byte length); // obliczenie XOR
+	byte callByteParity (byte me);	// obliczenie bitu parzystości
 
-	boolean XNetSendadd(unsigned char *dataString, byte byteCount);	//Zum Sendebuffer Hinzufügen
-	void XNetSendremoveFirst(void);	//ersten Eintrag aus dem Sendebuffer entfernen
-	void XNetsend(bool inTime); //Antwort auf Call Byte: Send Saved Data aus Sendebuffer
-	void XNetsend(unsigned char *dataString, byte byteCount);	//Sende Daten aus Array
+	boolean XNetSendadd(unsigned char *dataString, byte byteCount);	//dodanie komendy do kolejki
+	void XNetSendremoveFirst(void);	//usunięcie pierwszej komendy z kolejki
+	void XNetsend(bool inTime); //odpowiedź na call byte: wysłanie komendy z kolejki
+	void XNetsend(unsigned char *dataString, byte byteCount);	//wysłanie bajtów na magistralę
 };
 
 #if defined (__cplusplus)

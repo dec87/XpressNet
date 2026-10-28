@@ -1,25 +1,24 @@
 /*
-  XpressNet for ESP32
+  XpressNet dla ESP32
 
-  Showing the funktion of the Library: start/receive, the notify callbacks
-  and a periodic position request of one turnout.
+  Pokazuje działanie biblioteki: start/receive, funkcje zwrotne notify
+  oraz okresowe zapytanie o położenie jednej zwrotnicy.
 */
 
 #include <XpressNet.h>
 XpressNetClass XpressNet;
 
 //--------------------------------------------------------------
-// XpressNet address: must be in range of 1-31; must be unique. Note that some IDs
-// are currently used by default, like 2 for a LH90 or LH100 out of the box, or 30
-// for PC interface devices like the XnTCP.
-#define XNetAddress 30    //Adresse im XpressNet
+// Adres XpressNet: 1-31, musi być unikalny. Niektóre adresy są zajęte domyślnie,
+// np. 2 przez LH90/LH100 prosto z pudełka albo 30 przez interfejsy PC, takie jak XnTCP.
+#define XNetAddress 30    //adres w XpressNet
 #define XNetRxPin 8       //RS485 RO
 #define XNetTxPin 9       //RS485 DI
-#define XNetSRPin 12      //RS485 DE/RE Send/Receive-PIN
+#define XNetSRPin 12      //RS485 DE/RE - przełączanie nadawanie/odbiór
 
-#define LedPin 15         //Status LED
+#define LedPin 15         //dioda stanu
 
-#define DemoTurnoutAdr 1  //Adresse der Beispielweiche
+#define DemoTurnoutAdr 1  //adres przykładowej zwrotnicy
 #define interval 8500
 
 unsigned long previousMillisA = 0;
@@ -31,7 +30,7 @@ void setup() {
   Serial.begin(115200);
   Serial.println("XNet Test");
 
-  XpressNet.start(XNetAddress, XNetRxPin, XNetTxPin, XNetSRPin);    //Initialisierung XNet-Bus
+  XpressNet.start(XNetAddress, XNetRxPin, XNetTxPin, XNetSRPin);    //inicjalizacja magistrali XpressNet
 }
 
 void loop() {
@@ -40,7 +39,7 @@ void loop() {
   unsigned long currentMillis = millis();
   if (currentMillis - previousMillisA > interval) {
     previousMillisA = currentMillis;
-    // Aktuelle Schaltstellung der Beispielweiche abfragen:
+    // zapytaj o aktualne położenie przykładowej zwrotnicy
     XpressNet.getTrntInfo(0, DemoTurnoutAdr);
   }
 }

@@ -1,34 +1,31 @@
 /*
 *****************************************************************************
-*		XpressNet.h - library for a client XpressNet protocoll
-*		Copyright (c) 2015-2022 Philipp Gahtow  All right reserved.
+*		XpressNet.cpp - biblioteka klienta protokołu XpressNet
+*		Copyright (c) 2015-2022 Philipp Gahtow. Wszelkie prawa zastrzeżone.
 *
-**	 Free for Private usage only!
+**	 Tylko do użytku prywatnego!
 *****************************************************************************
-* IMPORTANT:
+* WAŻNE:
 *
-* 	Please contact Lenz Inc. for more details.
+* 	Szczegóły protokołu: Lenz Inc.
 *****************************************************************************
-*  see for changes in XpressNet.h!
+*  historia zmian: zob. XpressNet.h
 */
 
-// include this library's description file
 #include "XpressNet.h"
 #include <SoftwareSerial.h>
 
 static SoftwareSerial XNetSerial;
 
-// Constructor /////////////////////////////////////////////////////////////////
-// Function that handles the creation and setup of instances
+// Konstruktor /////////////////////////////////////////////////////////////////
 
 XpressNetClass::XpressNetClass()
 {
-	// initialize this instance's variables
 	memset(XNetSend, 0, sizeof(XNetSend));
 	memset(XNetMsg, 0, sizeof(XNetMsg));
 	memset(XNetMsgTemp, 0, sizeof(XNetMsgTemp));
-	XNetRun = false; // XNet ist inactive;
-	ReadData = false; // keine Serial Daten Speichern
+	XNetRun = false; // XpressNet nieaktywny
+	ReadData = false; // nie zapisuj odbieranych bajtów
 	DataReady = false;
 	XNetSendPending = false;
 	XNetSendFailed = false;
@@ -38,10 +35,10 @@ XpressNetClass::XpressNetClass()
 	lastIdleMicros = 0;
 }
 
-//******************************************Serial*******************************************
-void XpressNetClass::start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl) // Initialisierung Serial
+//******************************************Port szeregowy*******************************************
+void XpressNetClass::start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl)
 {
-	ledState = LOW;		 // Status LED, used to set the LED
+	ledState = LOW;		 // dioda stanu
 	lastByteMillis = millis();
 	lastIdleMicros = micros();
 	if (notifyXNetStatus)
@@ -49,7 +46,7 @@ void XpressNetClass::start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSe
 
 	MY_ADDRESS = XAdr;
 	MAX485_CONTROL = XControl;
-	// LISTEN_MODE
+	// tryb odbioru
 	pinMode(MAX485_CONTROL, OUTPUT);
 	digitalWrite(MAX485_CONTROL, LOW);
 
@@ -57,28 +54,27 @@ void XpressNetClass::start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSe
 	myCallByteInquiry = callByteParity(MY_ADDRESS | 0x40) | 0x100;
 	myDirectedOps = callByteParity(MY_ADDRESS | 0x60) | 0x100;
 
-	XNetSerial.begin(62500, SWSERIAL_8S1, XNetSerial_RX_Port, XNetSerial_TX_Port, false, 95); // parity mode SPACE = 9th bit 0 on send
+	XNetSerial.begin(62500, SWSERIAL_8S1, XNetSerial_RX_Port, XNetSerial_TX_Port, false, 95); // parzystość SPACE = 9. bit równy 0 przy nadawaniu
 	if (!XNetSerial)
-	{ // If the object did not initialize, then its configuration is invalid
+	{ // nieprawidłowa konfiguracja pinów
 		Serial.println("Invalid SoftwareSerial pin configuration, check config");
 		while (1)
-		{ // Don't continue with invalid configuration
+		{ // nie kontynuuj z błędną konfiguracją
 			delay(1000);
 		}
 	}
-	// high speed half duplex, turn off interrupts during tx
+	// szybka transmisja półdupleksowa: przerwania wyłączone podczas nadawania
 	XNetSerial.enableIntTx(false);
 }
 
-// Public Methods //////////////////////////////////////////////////////////////
-// Functions available in Wiring sketches, this library, and other libraries
+// Metody publiczne //////////////////////////////////////////////////////////////
 
 //*******************************************************************************************
-// Daten ermitteln und Auswerten - call as often as possible from loop()
+// Odbiór i obsługa danych - wywoływać jak najczęściej w loop()
 void XpressNetClass::receive(void)
 {
-	// Read everything that is waiting, not just one byte: the call byte for this
-	// device must be answered right away, not after older bytes in the buffer.
+	// Odczytaj wszystko, co czeka w buforze, a nie tylko jeden bajt: na call byte
+	// tego urządzenia trzeba odpowiedzieć od razu, a nie po starszych bajtach.
 	while (true)
 	{
 		if (!XNetSerial.available())
@@ -88,12 +84,12 @@ void XpressNetClass::receive(void)
 		}
 		unsigned int rxdata = XNetSerial.read();
 		if (XNetSerial.readParity())
-		{ // 9th bit set (MARK parity) = Call Byte
+		{ // ustawiony 9. bit (parzystość MARK) = call byte
 			rxdata |= 0x100;
 		}
-		// The byte completed some time after the buffer was last seen empty.
-		// Only if that was very recent and nothing else arrived after it is the
-		// answer window of the command station still open.
+		// Bajt został odebrany w całości po chwili, gdy bufor był ostatnio pusty.
+		// Okno odpowiedzi centralki jest jeszcze otwarte tylko wtedy, gdy było to
+		// bardzo niedawno i po tym bajcie nic więcej nie przyszło.
 		bool inTime = (XNetSerial.available() == 0) &&
 					  ((unsigned long)(micros() - lastIdleMicros) <= XNetMaxResponseDelayUs);
 		XNetprocessByte(rxdata, inTime);
@@ -104,10 +100,10 @@ void XpressNetClass::receive(void)
 		}
 	}
 
-	// no data on the bus: blink the status LED
+	// brak danych na magistrali: dioda stanu miga
 	if ((unsigned long)(millis() - lastByteMillis) > XNetTimeoutMs)
 	{
-		XNetRun = false; // Keine Zentrale vorhanden
+		XNetRun = false; // brak centralki
 		lastByteMillis = millis();
 		ledState = !ledState;
 		if (notifyXNetStatus)
@@ -116,10 +112,10 @@ void XpressNetClass::receive(void)
 }
 
 //--------------------------------------------------------------------------------------------
-// Auswerten einer vollständigen und geprüften Nachricht
+// Obsługa kompletnego i sprawdzonego komunikatu
 void XpressNetClass::XNethandleMessage(const uint8_t *msg)
 {
-	// Daten, setzte LED = ON!
+	// są dane: dioda stanu świeci
 	if (ledState == LOW)
 	{
 		ledState = HIGH;
@@ -131,10 +127,10 @@ void XpressNetClass::XNethandleMessage(const uint8_t *msg)
 	byte header = msg[XNetcom];
 
 	if (callByte == (GENERAL_BROADCAST & 0xFF))
-	{ // GENERAL_BROADCAST
+	{ // rozgłoszenie ogólne
 		if ((header & 0xF0) == 0x40)
 		{
-			// Feedback broadcast: pairs of address + data (turnouts and feedback modules)
+			// rozgłoszenie stanów: pary adres + dane (zwrotnice i czujniki)
 			byte pairs = (header & 0x0F) / 2;
 			for (byte i = 0; i < pairs; i++)
 			{
@@ -144,51 +140,51 @@ void XpressNetClass::XNethandleMessage(const uint8_t *msg)
 		return;
 	}
 
-	// Directed messages - also those for other devices (change by André Schenk)
+	// Komunikaty skierowane - także do innych urządzeń (zmiana: André Schenk)
 	switch (header)
 	{
-	// add by Norberto Redondo Melchor:
-	case 0x52: // Some other device asked for an accessory change: 1000CBBD
+	// autor: Norberto Redondo Melchor
+	case 0x52: // inne urządzenie przełącza akcesorium: 1000CBBD
 		if ((msg[XNetdata2] & 0xF0) == 0x80)
 		{
 			byte data2 = msg[XNetdata2];
 			unsigned int Adr = (msg[XNetdata1] << 2) | ((data2 & B0110) >> 1);
 			byte Pos = (data2 & B0001) + 1;
-			// C (bit 3) = 1: activate output, C = 0: deactivate output (reported as Pos | B1000)
+			// C (bit 3) = 1: włączenie wyjścia, C = 0: wyłączenie wyjścia (zgłaszane jako Pos | B1000)
 			if (!(data2 & B1000))
 				Pos = Pos | B1000;
 			if (notifyTrnt)
 				notifyTrnt(highByte(Adr), lowByte(Adr), Pos);
 		}
 		break;
-	case 0x62: // Statusantwort der Zentrale - einmaliges Anmelden am Bus
+	case 0x62: // odpowiedź centralki na zapytanie o status - jednorazowe zgłoszenie na magistrali
 		if (msg[XNetdata1] == 0x22)
 		{
 			if (XNetRun == false)
-			{ // Softwareversion anfragen
+			{ // zapytaj o wersję oprogramowania
 				unsigned char commandVersionSequence[] = {0x21, 0x21, 0x00};
 				XNetSendadd(commandVersionSequence, 3);
 				XNetRun = true;
 			}
-			// in powerup mode - wait until complete
+			// centralka w trakcie uruchamiania - poczekaj, aż skończy
 			if (msg[XNetdata2] != 0 && (msg[XNetdata2] & 0x40) == 0x40)
 			{
-				// put us in a state where we do the status request again...
+				// przy następnym odpytaniu ponownie zapytaj o status
 				XNetRun = false;
 			}
 		}
 		break;
-	case 0x42: // Antwort Schaltinformation
+	case 0x42: // odpowiedź z informacją o stanie zwrotnic
 		reportAccessory(msg[XNetdata1], msg[XNetdata2]);
 		break;
 	}
 }
 
 //--------------------------------------------------------------------------------------------
-// Aufbereiten der Schalt-/Rückmeldeinformation: data2 = ITTNZZZZ
+// Przekazanie informacji o zwrotnicach/czujnikach: data2 = ITTNZZZZ
 void XpressNetClass::reportAccessory(byte data1, byte data2)
 {
-	byte type = (data2 >> 5) & 0x03; // 00/01 = accessory decoder, 10 = feedback module, 11 = reserved
+	byte type = (data2 >> 5) & 0x03; // 00/01 = dekoder akcesoriów, 10 = moduł czujników, 11 = zarezerwowane
 	if (type == 0x03)
 		return;
 
@@ -219,11 +215,11 @@ void XpressNetClass::reportAccessory(byte data1, byte data2)
 }
 
 //--------------------------------------------------------------------------------------------
-// Ermitteln der Schaltstellung einer Weiche
+// Zapytanie o położenie zwrotnicy
 bool XpressNetClass::getTrntInfo(byte FAdr_High, byte FAdr_Low)
 {
 	int Adr = word(FAdr_High, FAdr_Low);
-	byte nibble = 0; // 0 = Weiche 0 und 1; 1 = Weiche 2 und 3
+	byte nibble = 0; // 0 = zwrotnice 0 i 1; 1 = zwrotnice 2 i 3
 	if ((Adr & 0x03) >= 2)
 		nibble = 1;
 	unsigned char getTrntPos[] = {0x42, 0x00, 0x80, 0x00};
@@ -234,17 +230,17 @@ bool XpressNetClass::getTrntInfo(byte FAdr_High, byte FAdr_Low)
 }
 
 //--------------------------------------------------------------------------------------------
-// Schalten einer Weiche
+// Przełączenie zwrotnicy
 bool XpressNetClass::setTrntPos(byte FAdr_High, byte FAdr_Low, byte Pos)
-// Pos = 0000A00P	A=Weichenausgang (Aktive/Inaktive); P=Weiche nach links oder nach rechts
+// Pos = 0000A00P	A = wyjście włączone/wyłączone; P = kierunek zwrotnicy
 {
 	int Adr = word(FAdr_High, FAdr_Low);
-	byte AdrL = ((Pos & 0x0F) | B110) & (((Adr & 0x03) << 1) | B1001); // 1000ABBP -> A00P = Pos | BB = Adr & 0x03 (LSB Weichenadr.)
+	byte AdrL = ((Pos & 0x0F) | B110) & (((Adr & 0x03) << 1) | B1001); // 1000ABBP: A00P = Pos, BB = Adr & 0x03 (najmłodsze bity adresu)
 
 	Adr = Adr >> 2;
 	bitWrite(AdrL, 7, 1);
 	unsigned char setTrnt[] = {0x52, 0x00, AdrL, 0x00};
-	setTrnt[1] = Adr; // change by André Schenk
+	setTrnt[1] = Adr; // zmiana: André Schenk
 	getXOR(setTrnt, 4);
 
 	if (notifyTrnt)
@@ -253,11 +249,10 @@ bool XpressNetClass::setTrntPos(byte FAdr_High, byte FAdr_Low, byte Pos)
 	return XNetSendadd(setTrnt, 4);
 }
 
-// Private Methods ///////////////////////////////////////////////////////////////////////////////////////////////////
-// Functions only available to other functions in this library *******************************************************
+// Metody prywatne ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 //--------------------------------------------------------------------------------------------
-// calculate the XOR
+// obliczenie XOR (zapisywany w ostatnim bajcie)
 void XpressNetClass::getXOR(unsigned char *data, byte length)
 {
 	byte XOR = 0x00;
@@ -270,7 +265,7 @@ void XpressNetClass::getXOR(unsigned char *data, byte length)
 }
 
 //--------------------------------------------------------------------------------------------
-// calculate the parity bit in the call byte for this guy
+// obliczenie bitu parzystości w call bycie
 byte XpressNetClass::callByteParity(byte me)
 {
 	byte parity = (1 == 0);
@@ -289,22 +284,22 @@ byte XpressNetClass::callByteParity(byte me)
 }
 
 //--------------------------------------------------------------------------------------------
-// Ein empfangenes Byte auswerten.
-// inTime = false: the call byte was read too late to answer it without a collision.
+// Obsługa jednego odebranego bajtu.
+// inTime = false: call byte odczytany za późno, by odpowiedzieć bez kolizji.
 void XpressNetClass::XNetprocessByte(unsigned int rxdata, bool inTime)
 {
-	lastByteMillis = millis(); // Reset Time Count
+	lastByteMillis = millis(); // reset licznika czasu
 
-	// This IS a Call Byte
+	// to jest call byte
 	if (rxdata >= 0x100)
-	{					  // Neue Nachricht beginnen
-		ReadData = false; // keine Speichern der Serial Daten
-		XNetmessageComplete();			// previous message is complete now
-		XNetMsgTemp[XNetlength] = 0;	// never deliver it a second time
+	{					  // początek nowego komunikatu
+		ReadData = false; // nie zapisuj odbieranych bajtów
+		XNetmessageComplete();			// poprzedni komunikat jest już kompletny
+		XNetMsgTemp[XNetlength] = 0;	// nigdy nie przekazuj go drugi raz
 
 		if (rxdata == myRequestAck)
 		{
-			// The command station did not get our last transmission right
+			// centralka nie odebrała poprawnie naszej ostatniej transmisji
 			if (XNetSendPending)
 				XNetSendFailed = true;
 			if (inTime)
@@ -312,50 +307,50 @@ void XpressNetClass::XNetprocessByte(unsigned int rxdata, bool inTime)
 				unsigned char requestAckAck[] = {0x20, 0x20};
 				XNetsend(requestAckAck, 2);
 			}
-			return; // Daten wurden verarbeitet
+			return; // bajt obsłużony
 		}
 		else if (rxdata == myCallByteInquiry)
 		{
 			XNetsend(inTime);
-			return; // Daten wurden verarbeitet
+			return; // bajt obsłużony
 		}
-		// GENERAL_BROADCAST, directed message or another device: Datenempfang aktivieren
+		// rozgłoszenie, komunikat do nas lub do innego urządzenia: włącz zapisywanie
 		ReadData = true;
 	}
 	if (ReadData == true)
 	{
 		if (XNetMsgTemp[XNetlength] >= (XNetMsgSize - 1))
-		{ // longer than any valid message: discard it, do not write past the buffer
+		{ // dłuższy niż jakikolwiek poprawny komunikat: odrzuć, nie pisz poza bufor
 			ReadData = false;
 			XNetMsgTemp[XNetlength] = 0;
 			return;
 		}
-		XNetMsgTemp[XNetlength]++;							  // Let's make room for it...
-		XNetMsgTemp[XNetMsgTemp[XNetlength]] = rxdata & 0xFF; //...and store it
+		XNetMsgTemp[XNetlength]++;							  // zrób miejsce...
+		XNetMsgTemp[XNetMsgTemp[XNetlength]] = rxdata & 0xFF; //...i zapisz bajt
 	}
 }
 
 //--------------------------------------------------------------------------------------------
-// Check the collected message (length from header, XOR) and hand it over.
+// Sprawdzenie zebranego komunikatu (długość z nagłówka, XOR) i przekazanie go dalej.
 void XpressNetClass::XNetmessageComplete(void)
 {
-	byte len = XNetMsgTemp[XNetlength]; // call byte + header + data + XOR
+	byte len = XNetMsgTemp[XNetlength]; // call byte + nagłówek + dane + XOR
 	if (len < 3)
 		return;
 	byte header = XNetMsgTemp[XNetcom];
 	if (len != (header & 0x0F) + 3)
-		return; // incomplete or too long
+		return; // niekompletny lub za długi
 	byte XOR = 0x00;
 	for (byte i = XNetcom; i <= len; i++)
 		XOR ^= XNetMsgTemp[i];
 	if (XOR != 0x00)
-		return; // transmission error
+		return; // błąd transmisji
 
-	// Answer of the command station to our last transmission?
+	// Odpowiedź centralki na naszą ostatnią transmisję?
 	if (XNetSendPending && XNetMsgTemp[XNetmsg] == (myDirectedOps & 0xFF) && header == 0x61)
 	{
-		// 0x80 = transfer error, 0x81 = command station busy -> send again
-		// (0x82 = instruction not supported -> drop)
+		// 0x80 = błąd transmisji, 0x81 = centralka zajęta -> wyślij ponownie
+		// (0x82 = komenda nieobsługiwana -> odrzuć)
 		if (XNetMsgTemp[XNetdata1] == 0x80 || XNetMsgTemp[XNetdata1] == 0x81)
 			XNetSendFailed = true;
 	}
@@ -372,13 +367,13 @@ boolean XpressNetClass::XNetSendadd(unsigned char *dataString, byte byteCount)
 	for (byte i = 0; i < XSendMax; i++)
 	{
 		if (XNetSend[i].length == 0)
-		{									// Daten hier Eintragen:
+		{									// wolne miejsce - zapisz komendę
 			memcpy(XNetSend[i].data, dataString, byteCount);
-			XNetSend[i].length = byteCount; // Datenlaenge
-			return true; // leeren Platz gefunden -> ENDE
+			XNetSend[i].length = byteCount;
+			return true;
 		}
 	}
-	return false; // Kein Platz im Sendbuffer frei!
+	return false; // brak miejsca w kolejce wysyłania
 }
 
 //--------------------------------------------------------------------------------------------
@@ -389,20 +384,20 @@ void XpressNetClass::XNetSendremoveFirst(void)
 }
 
 //--------------------------------------------------------------------------------------------
-// Answer to our call byte: send the next command from the send buffer.
-// A command stays in the buffer until the command station took it without
-// "transfer error"/"busy" (that answer always comes before our next call byte).
+// Odpowiedź na nasz call byte: wysłanie kolejnej komendy z kolejki.
+// Komenda zostaje w kolejce, dopóki centralka nie przyjmie jej bez "błąd transmisji"/"zajęta"
+// (taka odpowiedź zawsze przychodzi przed naszym następnym call bytem).
 void XpressNetClass::XNetsend(bool inTime)
 {
 	if (XNetSendPending)
 	{
 		if (XNetSendFailed && XNetSendRetries < XSendMaxRetry)
 		{
-			XNetSendRetries++; // keep it, send again
+			XNetSendRetries++; // zostaw w kolejce, wyślij ponownie
 		}
 		else
 		{
-			XNetSendremoveFirst(); // accepted (or too many retries)
+			XNetSendremoveFirst(); // przyjęta (albo za dużo powtórzeń)
 			XNetSendRetries = 0;
 		}
 		XNetSendPending = false;
@@ -410,7 +405,7 @@ void XpressNetClass::XNetsend(bool inTime)
 	}
 
 	if (!inTime)
-		return; // too late, answer at the next call byte
+		return; // za późno, odpowiedz przy następnym call bycie
 
 	if (XNetRun == false)
 	{
@@ -420,7 +415,7 @@ void XpressNetClass::XNetsend(bool inTime)
 	}
 
 	while (XNetSend[0].length != 0 && XNetSend[0].data[0] == 0)
-		XNetSendremoveFirst(); // invalid entry
+		XNetSendremoveFirst(); // nieprawidłowy wpis
 
 	if (XNetSend[0].length != 0)
 	{
@@ -430,12 +425,12 @@ void XpressNetClass::XNetsend(bool inTime)
 }
 
 //--------------------------------------------------------------------------------------------
-// send along a bunch of bytes to the Command Station
+// wysłanie bajtów do centralki
 void XpressNetClass::XNetsend(unsigned char *dataString, byte byteCount)
 {
 	digitalWrite(MAX485_CONTROL, HIGH);
 	XNetSerial.enableTx(true);
-	// one call for all bytes: no gaps between them; returns after the last stop bit
+	// jedno wywołanie dla wszystkich bajtów: bez przerw między nimi; wraca po ostatnim bicie stopu
 	XNetSerial.write(dataString, byteCount);
 	delayMicroseconds(10);
 	digitalWrite(MAX485_CONTROL, LOW);

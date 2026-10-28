@@ -1,33 +1,32 @@
 /*
-  XpressNet for ESP32
+  XpressNet dla ESP32
 
-  Showing the funktion of the Library for a single push-button Turnout toggle
+  Pokazuje przełączanie zwrotnicy jednym przyciskiem (każde wciśnięcie zmienia kierunek).
 
-  The circuit:
- * Status LED attached from LedPin to ground, turnout LED from TurnoutLedPin to ground
- * pushbutton from ButtonPin to ground (internal pull-up)
+  Układ:
+ * dioda stanu od LedPin do masy, dioda zwrotnicy od TurnoutLedPin do masy
+ * przycisk od ButtonPin do masy (wewnętrzny pull-up)
 */
 
 #include <XpressNet.h>
 XpressNetClass XpressNet;
 
-#define LedPin 15         //Status LED
-#define TurnoutLedPin 16  //Signalisiert die letzte Weichenstellung
-#define ButtonPin 10      //Taster zum Umschalten der Weiche
+#define LedPin 15         //dioda stanu
+#define TurnoutLedPin 16  //sygnalizuje ostatnie położenie zwrotnicy
+#define ButtonPin 10      //przycisk przełączania zwrotnicy
 
-byte lastButtonState = HIGH;    // variable for reading the Button status
-byte turnoutState = LOW;        // toggelt bei jedem Tastendruck
+byte lastButtonState = HIGH;    // poprzedni stan przycisku
+byte turnoutState = LOW;        // zmienia się przy każdym wciśnięciu
 
 //--------------------------------------------------------------
-// XpressNet address: must be in range of 1-31; must be unique. Note that some IDs
-// are currently used by default, like 2 for a LH90 or LH100 out of the box, or 30
-// for PC interface devices like the XnTCP.
-#define XNetAddress 30    //Adresse im XpressNet
+// Adres XpressNet: 1-31, musi być unikalny. Niektóre adresy są zajęte domyślnie,
+// np. 2 przez LH90/LH100 prosto z pudełka albo 30 przez interfejsy PC, takie jak XnTCP.
+#define XNetAddress 30    //adres w XpressNet
 #define XNetRxPin 8       //RS485 RO
 #define XNetTxPin 9       //RS485 DI
-#define XNetSRPin 12      //RS485 DE/RE Send/Receive-PIN
+#define XNetSRPin 12      //RS485 DE/RE - przełączanie nadawanie/odbiór
 
-#define SwitchAdr 18      //Adresse der Beispielweiche
+#define SwitchAdr 18      //adres przykładowej zwrotnicy
 
 //--------------------------------------------------------------------------------------------
 void setup() {
@@ -39,26 +38,26 @@ void setup() {
 
   pinMode(ButtonPin, INPUT_PULLUP);
 
-  XpressNet.start(XNetAddress, XNetRxPin, XNetTxPin, XNetSRPin);    //Initialisierung XNet-Bus
+  XpressNet.start(XNetAddress, XNetRxPin, XNetTxPin, XNetSRPin);    //inicjalizacja magistrali XpressNet
 }
 
 //--------------------------------------------------------------------------------------------
 void loop() {
-  XpressNet.receive();  //permanent update the library
+  XpressNet.receive();  //ciągła obsługa biblioteki
 
-  CheckButton();  //check if Button push
+  CheckButton();  //sprawdź, czy przycisk został wciśnięty
 }
 
 //--------------------------------------------------------------------------------------------
 void CheckButton()
 {
-  if (digitalRead(ButtonPin) == LOW && lastButtonState == HIGH) { //down
-    lastButtonState = LOW;  //save state
+  if (digitalRead(ButtonPin) == LOW && lastButtonState == HIGH) { //wciśnięty
+    lastButtonState = LOW;  //zapamiętaj stan
     turnoutState = !turnoutState;
-    XpressNet.setTrntPos(0, SwitchAdr, turnoutState ? B1001 : B1000); // output active, P = turnoutState
+    XpressNet.setTrntPos(0, SwitchAdr, turnoutState ? B1001 : B1000); // wyjście włączone, P = turnoutState
   }
-  if (digitalRead(ButtonPin) == HIGH && lastButtonState == LOW) { //up
-    lastButtonState = HIGH; //save state
+  if (digitalRead(ButtonPin) == HIGH && lastButtonState == LOW) { //puszczony
+    lastButtonState = HIGH; //zapamiętaj stan
   }
 }
 

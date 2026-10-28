@@ -1,26 +1,26 @@
 /*
-  Simple XpressNet sniffer for ESP32
+  Prosty podsłuch magistrali XpressNet dla ESP32
 */
 
 #include <XpressNet.h>
 
 // -----------------------------------------------------------
-// XpressNet settings
+// Ustawienia XpressNet
 // -----------------------------------------------------------
-// My XpressNet address
+// mój adres XpressNet
 #define XNetAddress 30
 
 #define XNetRxPin 8       //RS485 RO
 #define XNetTxPin 9       //RS485 DI
-#define XNetSRPin 12      //RS485 DE/RE send/receive pin
+#define XNetSRPin 12      //RS485 DE/RE - przełączanie nadawanie/odbiór
 
-#define LedPin 15         //Status LED
+#define LedPin 15         //dioda stanu
 
 XpressNetClass XpressNet;
 
 void setup()
 {
-  // debug output
+  // wyjście diagnostyczne
   Serial.begin(115200);
   Serial.println();
   Serial.println("XpressNet Sniffer");
