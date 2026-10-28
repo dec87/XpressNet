@@ -35,6 +35,31 @@ void notifyTrnt(uint8_t Adr_High, uint8_t Adr_Low, uint8_t Pos);       // turnou
 void notifyFeedback(uint8_t Adr_High, uint8_t Adr_Low, uint8_t Pos);   // feedback module report
 ```
 
+`notifyTrnt` reports `Pos` = 1 or 2 for a known position, 0 for a turnout that was
+not switched yet and 3 for an invalid state. When another device sends a
+deactivate command (0x52 with C = 0), `Pos` has bit 3 set (`Pos | B1000`).
+
+## Reliable transfer
+
+- Call `receive()` as often as possible. It reads all waiting bytes at once.
+- On ESP8266/ESP32 (Software Serial) the call byte of this device is answered only
+  while the answer window of the command station is still open. When `loop()` was
+  busy and the call byte is read too late, that poll is skipped (an answer would
+  collide with the next call byte) and the command is sent at the next poll.
+- A sent command stays in the send buffer until the command station accepts it.
+  After "transfer error" (0x61 0x80), "command station busy" (0x61 0x81) or a
+  request acknowledgement it is sent again, up to `XSendMaxRetry` times.
+- Received messages are checked (length from the header, XOR) before they are
+  passed on; too long messages are dropped instead of overwriting memory.
+
+Tuning (define before including the library, e.g. in `build_flags`):
+
+| Define | Default | Meaning |
+|---|---|---|
+| `XSendMaxRetry` | 5 | resends of one command before it is dropped |
+| `XNetMaxResponseDelayUs` | 60 | max. delay (µs) for answering our call byte (Software Serial) |
+| `XNetTimeoutMs` | 1000 | no bus data for this long = no command station, status LED blinks |
+
 ## Examples
 
 - `Xpressnet_Lib` - minimal setup showing start/receive and the notify callbacks

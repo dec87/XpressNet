@@ -3,7 +3,7 @@
   Copyright (c) 2013-2024 Philipp Gahtow  All right reserved.
   for Private use only!
 
-  Version 2.7.2 (27.07.2024)
+  Version 2.8.0 (28.10.2026)
 
   Notice:
   Works until now, only with XPressNet Version 3.0 or higher!
@@ -23,6 +23,15 @@
   19.11.2021 Philipp Gahtow - add new function to set LokFunc in packets; fix E4 commands return fault loco adr and func;
   31.01.2022 Philipp Gahtow - add Support with use of Software Serial for ESP8266 and ESP32 (https://github.com/plerup/espsoftwareserial)
   27.01.2024 Philipp Gahtow - add Support Leonardo
+  28.10.2026 Damian Celmer  - reliable transfer: drain the whole RX buffer each receive() call,
+							  answer the call byte only while the poll window is still open,
+							  keep a sent command until the command station accepts it and
+							  resend it after "transfer error"/"busy" or a request acknowledgement,
+							  bounded RX buffer (fixes overwriting the send queue), XOR/length check
+							  of received messages, no duplicate delivery of the previous message,
+							  broadcast 0x4X routed by type (turnout -> notifyTrnt, feedback ->
+							  notifyFeedback), 0x52 activate bit read according to the spec,
+							  bus timeout measured in milliseconds
 */
 
 // ensure this library description is only included once
@@ -54,7 +63,7 @@
 #define SERIAL_PORT_1
 #undef SERIAL_PORT_0
 
-#elif defined(ESP8266) || (ESP32)		//ESP8266 and ESP32 Support
+#elif defined(ESP8266) || defined(ESP32)		//ESP8266 and ESP32 Support
 #define XNetSerial_Default	D7
 
 #else //others Arduino UNO
@@ -88,8 +97,30 @@
 #define XNetdata4	6		//Databyte4
 #define XNetdata5	7		//Databyte5
 
+// Receive buffer: [0] = length, then call byte, header, up to 15 data bytes and the XOR byte.
+#define XNetMsgSize 19
+
 #define XSendMax 16			//Maximalanzahl der Datenpakete im Sendebuffer
 #define XSendMaxData 8		//Anzahl Elemente im Datapaket Array XSend
+
+// How often a command is resent after "transfer error"/"command station busy"
+// or a request acknowledgement before it is dropped.
+#ifndef XSendMaxRetry
+#define XSendMaxRetry 5
+#endif
+
+// Software Serial only: the call byte for this device is answered only if it was
+// read at most this many microseconds after the receive buffer was last seen empty.
+// A later answer would collide with the next call byte of the command station,
+// so the poll is skipped instead and the command waits for the next one.
+#ifndef XNetMaxResponseDelayUs
+#define XNetMaxResponseDelayUs 60
+#endif
+
+// No byte on the bus for this long = no command station (status LED blinks).
+#ifndef XNetTimeoutMs
+#define XNetTimeoutMs 1000
+#endif
 
 typedef struct	//Antwort/Abfragespeicher
 {
@@ -104,7 +135,7 @@ class XpressNetClass
   // user-accessible "public" interface
   public:
     XpressNetClass(void);	//Constuctor
-	#if defined(ESP8266) || (ESP32)
+	#if defined(ESP8266) || defined(ESP32)
 	void start(byte XAdr, uint8_t XNetSerial_RX_Port, uint8_t XNetSerial_TX_Port, uint8_t XControl);  //Initialisierung Serial
 	#else
 	void start(byte XAdr, uint8_t XControl);  //Initialisierung Serial
@@ -126,13 +157,21 @@ class XpressNetClass
 	unsigned int myDirectedOps;		// the address we look for when we are listening for ops
 	unsigned int myCallByteInquiry;	// the address we look for for our Call Byte Window
 	unsigned int myRequestAck;		// the address for a request acknowlegement sent
-	uint8_t XNetMsg[8];		//Daten wurden empfangen
-	bool DataReady;				//Daten können verarbeitet werden
-	uint8_t XNetMsgTemp[8];		//Serial receive (Length, Message, Command, Data1 to Data5)
+	uint8_t XNetMsg[XNetMsgSize];		//Daten wurden empfangen (geprüfte Nachricht)
+	volatile bool DataReady;			//Daten können verarbeitet werden
+	uint8_t XNetMsgTemp[XNetMsgSize];	//Serial receive (Length, Message, Command, Data1 ...)
 	bool ReadData;				//Empfangene Serial Daten: (Speichern = true/Komplett = false)
-	static XpressNetClass *active_object;	//aktuelle aktive Object 
-	void XNetget(void);			//Empfangene Daten eintragen 
+	static XpressNetClass *active_object;	//aktuelle aktive Object
+	void XNetget(void);			//Empfangene Daten eintragen (AVR: aus dem Interrupt)
+	void XNetprocessByte(unsigned int rxdata, bool inTime);	//ein empfangenes Byte auswerten
+	void XNetmessageComplete(void);	//Nachricht prüfen (Länge/XOR) und übergeben
+	void XNethandleMessage(const uint8_t *msg);	//geprüfte Nachricht auswerten
 	XSend XNetSend[XSendMax];		//Sendbuffer
+
+	// state of the command at the head of the send buffer
+	bool XNetSendPending;		//Befehl gesendet, Ergebnis noch offen
+	bool XNetSendFailed;		//Zentrale meldet Fehler/Busy -> erneut senden
+	uint8_t XNetSendRetries;	//Anzahl Wiederholungen des aktuellen Befehls
 
 		//Functions:
 	void getXOR (unsigned char *data, byte length); // calculate the XOR
@@ -141,16 +180,18 @@ class XpressNetClass
 	void USART_Transmit (unsigned char data8); //Serial Senden
 	void XNetclear(void);		//Serial Nachricht zurücksetzten
 
-	void sendSchaltinfo(bool schaltinfo, byte data1, byte data2);  //Aufbereiten der Schaltinformation
-	
+	void reportAccessory(byte data1, byte data2);  //Aufbereiten der Schalt-/Rückmeldeinformation
+
 	void XNetclearSendBuf();	//Sendbuffer leeren
 	boolean XNetSendadd(unsigned char *dataString, byte byteCount);	//Zum Sendebuffer Hinzufügen
-	void XNetsend(void); //Send Saved Data aus Sendebuffer
+	void XNetSendremoveFirst(void);	//ersten Eintrag aus dem Sendebuffer entfernen
+	void XNetsend(bool inTime); //Antwort auf Call Byte: Send Saved Data aus Sendebuffer
 	void XNetsend(unsigned char *dataString, byte byteCount);	//Sende Daten aus Array
 
 	//Status LED:
 	int ledState;             // ledState used to set the LED
-	long previousMillis;        // will store last time LED was updated
+	volatile unsigned long lastByteMillis;	// time of the last received byte / LED toggle
+	unsigned long lastIdleMicros;	// last time the receive buffer was seen empty (Software Serial)
 };
 
 #if defined (__cplusplus)
